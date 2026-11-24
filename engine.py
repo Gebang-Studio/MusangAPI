@@ -328,10 +328,19 @@ def _stream_safe(text: str) -> str:
 
 # Balasan muse datang lewat WebSocket terenkripsi (Noise), jadi CDP Network hanya melihat ciphertext.
 # Setelah didekripsi, halaman mem-parse event ndjson dengan JSON.parse: di sinilah markdown mentah bisa dibaca.
-# Chrome Android di latar belakang tidak me-render, jadi requestAnimationFrame tidak pernah jalan
-# dan hydration React muse macet di "server". Diganti setTimeout hanya untuk Chrome Android.
-_ANDROID_RAF_JS = ("window.requestAnimationFrame=function(cb){return setTimeout(function(){cb(performance.now())},16)};"
-                   "window.cancelAnimationFrame=function(id){clearTimeout(id)};")
+# Tab Chrome Android di latar belakang tidak pernah di-render, padahal dua API hanya jalan saat render:
+# - requestAnimationFrame: hydration React muse macet di "server";
+# - IntersectionObserver: gambar hasil muse tertahan di skeleton "loading-state" selamanya.
+# Keduanya diganti versi tanpa render, hanya untuk Chrome Android (engine.android).
+_ANDROID_BG_JS = """(function(){
+window.requestAnimationFrame=function(cb){return setTimeout(function(){cb(performance.now())},16)};
+window.cancelAnimationFrame=function(id){clearTimeout(id)};
+if(!window.IntersectionObserver)return;
+window.IntersectionObserver=function(cb){var ts=new Set(),self={root:null,rootMargin:'0px',thresholds:[0],
+ observe:function(t){ts.add(t);setTimeout(function(){if(!ts.has(t))return;var r=t.getBoundingClientRect();
+  cb([{target:t,isIntersecting:true,intersectionRatio:1,boundingClientRect:r,intersectionRect:r,rootBounds:null,time:performance.now()}],self)},0)},
+ unobserve:function(t){ts.delete(t)},disconnect:function(){ts.clear()},takeRecords:function(){return[]}};return self};
+})();"""
 
 _DELTA_HOOK_JS = """(function(){
   if (window.__museEvt) return; window.__museEvt = [];
@@ -675,7 +684,7 @@ class MuseEngine:
             page.send("Runtime.enable")
             page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _DELTA_HOOK_JS})
             if self.android:
-                page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _ANDROID_RAF_JS})
+                page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _ANDROID_BG_JS})
             page.send("Browser.setDownloadBehavior", {
                 "behavior": "allow", "downloadPath": self._new_download_dir(),
                 "browserContextId": ctx_id,
