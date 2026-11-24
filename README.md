@@ -16,10 +16,11 @@ muse.ai tidak menyediakan API publik. GemuseAPI menjalankan Chrome headless, mas
 
 - **API kompatibel OpenAI**: `/v1/chat/completions` dan `/v1/responses` (stream SSE dan non-stream), `/v1/images/generations`, `/v1/images/edits`, `/v1/videos`.
 - **Chat UI di `/chat`**: riwayat tersimpan di server, Stop, Ulangi, Edit pesan terakhir, tabel dan kode, lampiran gambar (tombol, tempel, atau seret), serta tampilan HP. Jenis pesan dipilih otomatis oleh AI muse. Perintah `/gambar`, `/video`, dan `/chat` memaksa jenis tertentu.
+- **Batch template**: tempel daftar prompt bernomor, konfirmasi sekali, lalu setiap template jadi tugas sendiri (maksimal 3 berjalan bersamaan).
 - **File buatan muse**: txt, zip, pdf, docx, csv, md, dan json bisa diunduh lewat `/v1/files/…`.
 - **Pool akun**: banyak akun muse sekaligus, rotasi otomatis, proxy HTTP/SOCKS5 per akun, dan keepalive sesi.
 - **Failover video**: akun yang ditolak membuat video karena wilayah dicatat, lalu tugas dipindah ke akun lain.
-- **Konsol admin di `/admin`**: akun, impor cookie, tugas, media, uji API, dan dokumentasi endpoint.
+- **Konsol admin di `/admin`**: akun, impor cookie, tugas, media (unduh satu atau ZIP), uji API, dan dokumentasi endpoint.
 - **Ingatan percakapan**: permintaan lanjutan ("buat versi malam", "lanjutkan videonya") memakai gambar atau frame terakhir sebagai acuan, walaupun pindah akun.
 
 ## Mulai cepat
@@ -152,4 +153,4 @@ Test browser butuh Chrome (`MUSE2API_CHROMIUM`). Panduan lengkap untuk kontribut
 ## Lisensi dan kredit
 
 MIT. Lihat [`LICENSE`](LICENSE).
-GemuseAPI adalah fork dari [muse2api](https://github.com/czg86389-hub/muse2api) karya czg86389-hub dan kontributornya. Bagian inti (engine CDP, pool akun, endpoint OpenAI, admin) berasal dari sana. Gebang Studio menambahkan UI chat, file buatan muse, ingatan percakapan, failover video, dan terjemahan Indonesia.
+GemuseAPI adalah fork dari [muse2api](https://github.com/czg86389-hub/muse2api) karya czg86389-hub dan kontributornya. Bagian inti (engine CDP, pool akun, endpoint OpenAI, admin) berasal dari sana. Gebang Studio menambahkan UI chat, file buatan muse, batch template, ingatan percakapan, failover video, dan terjemahan Indonesia.
