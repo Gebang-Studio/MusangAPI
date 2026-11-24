@@ -45,7 +45,8 @@ Isi `data/`: `accounts.json` (cookie, rahasia), `tasks.json`, `chats.json` (riwa
 
 ## Aturan yang tidak terlihat dari kode
 
-- **Nama**: teks yang dilihat pengguna memakai "GemuseAPI". Nama teknis tetap `muse2api`, yaitu `MUSE2API_*`, kunci localStorage, IndexedDB `muse2api`, path deploy, nama zip, dan link repo. Kalau nama teknis diganti, key dan riwayat chat pengguna hilang.
+- **Nama**: teks yang dilihat pengguna memakai "GemuseAPI". Nama teknis tetap `muse2api`, yaitu `MUSE2API_*`, kunci localStorage, IndexedDB `muse2api`, path deploy, dan nama zip. Kalau nama teknis diganti, key dan riwayat chat pengguna hilang.
+- **Repo**: semua link dan pengecekan update mengarah ke `Gebang-Studio/MusangAPI` (`REPO_SLUG` di `app.py`, `version.json`, header userscript). Upstream `czg86389-hub/muse2api` hanya disebut sebagai kredit di README. Untuk mengambil perubahan dari upstream, gunakan `git fetch origin`.
 - **Modul baru** wajib ditambahkan ke `TRACKED_REPO_PATHS` (`app.py`) **dan** `COPY` di `Dockerfile`, karena `test_release_integration.py` memeriksanya. `GENERATION_QUEUE.md` dan `VERSION_REPORTING.md` wajib ada di daftar itu, jadi jangan dihapus.
 - **Shell dan iframe**: admin dan chat sama-sama punya global `$`, `KEY`, `api`, dan handler `onclick` inline, jadi tidak bisa digabung dalam satu dokumen. Di dalam iframe, `@media` mengikuti lebar iframe. Tabel akun harus tetap berupa `<table>` dengan `td.ellip`, karena itu kontrak `test_admin_layout`.
 - **Intent**: `/v1/intent` bertanya ke chat muse (`intent.ai_prompt` + 6 pesan terakhir, timeout 60 detik). `classify` hanya cadangan kalau muse gagal. Perintah `/video`, `/gambar`, dan `/chat` melewati AI. Daftar template bernomor dipecah `split_items`, lalu chat.html meminta konfirmasi dan menjalankan satu tugas per template, maksimal 3 sekaligus.
