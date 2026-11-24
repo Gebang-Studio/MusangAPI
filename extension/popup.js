@@ -1,4 +1,4 @@
-/* Muse2API Cookie 导入 —— 读取 muse.ai 的 cookie 并 POST 到 muse2api 服务。
+/* GemuseAPI Cookie 导入 —— 读取 muse.ai 的 cookie 并 POST 到 GemuseAPI 服务。
  *
  * 关键点：用 chrome.cookies 而不是 document.cookie。
  * muse.ai 的关键会话 cookie（hatch_sess / hatch_vml）带 httpOnly，
@@ -27,9 +27,9 @@ function setLang(v) {
 /* 整句：中文 → 英文 */
 const I18N_EN = {
   // popup.html 静态文案
-  'Muse2API Cookie 导入': 'Muse2API Cookie Import',
-  '把当前浏览器里 muse.ai 的登录态，一键同步到你的 muse2api 服务。':
-    'Sync the muse.ai login session from this browser to your muse2api service in one click.',
+  'GemuseAPI Cookie 导入': 'GemuseAPI Cookie Import',
+  '把当前浏览器里 muse.ai 的登录态，一键同步到你的 GemuseAPI 服务。':
+    'Sync the muse.ai login session from this browser to your GemuseAPI service in one click.',
   '服务地址（BASE URL）': 'Service URL (BASE URL)',
   '账号标签（可留空）': 'Account label (optional)',
   '例如 muse-main': 'e.g. muse-main',
@@ -71,7 +71,7 @@ const I18N_EN_HTML = {
   steps: '<b>Before you start, check two things:</b><br>\n'
     + '    1. You are logged in to <a href="https://muse.ai/" target="_blank"\n'
     + '       style="color:#4f8cff">muse.ai</a> in <b>this browser</b> (you can see the chat interface).<br>\n'
-    + '    2. The service URL and API Key above are filled in (you can copy them from the top of the "Account Pool" tab on the muse2api admin page).',
+    + '    2. The service URL and API Key above are filled in (you can copy them from the top of the "Account Pool" tab on the GemuseAPI admin page).',
   foot: 'This extension does only one thing: it uses the browser\'s <code>chrome.cookies</code> API to read muse.ai\n'
     + '    cookies (including the httpOnly ones) and POSTs them to the service URL you entered.\n'
     + '    Nothing is collected or uploaded to any third-party server.',

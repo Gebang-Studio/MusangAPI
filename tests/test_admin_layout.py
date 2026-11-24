@@ -120,12 +120,13 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home()) as home:
    server_state['mode']='update'
    page.js("loadRepoStatus(true);goTab('pool')")
    print('UI_FEATURE_PROBE',lang,json.dumps({'errors':feature_errors,'original_video_requests':[x['path']for x in network if x['path'].endswith('.mp4')]}),flush=True)
-   for width in ([1920] if args.probe_only else [2560,1920,1536,1440,1366,1280,768,390,320]):
+   for width in ([1920] if args.probe_only else [2560,1920,1536,1440,1366,1280,1128,768,390,320]):
     page.send('Emulation.setDeviceMetricsOverride',{'width':width,'height':1080,'deviceScaleFactor':1,'mobile':False})
     time.sleep(.15);m=page.js(measure);print(json.dumps({'lang':lang,**m}),flush=True)
     assert m['mainWidth']>=width-24,'Page does not fill the viewport'
     assert m['bodyWidth']<=width+1,'Page overflows the viewport'
-    if width>=1280:assert m['tableScroll']<=m['tableWidth']+1,'Desktop account controls need horizontal scrolling'
+    # 1128 = batas aman desktop (iframe admin = layar - rail 72; layar 1200 -> 1128).
+    if width>=1128:assert m['tableScroll']<=m['tableWidth']+1,'Desktop account controls need horizontal scrolling'
     assert m['noteDisplay']=='table-cell' and m['noteWhiteSpace']=='normal','Notes must retain table-cell layout and wrap'
     assert m['buttons']==8
     if width==1920 and not args.probe_only and args.screenshots:

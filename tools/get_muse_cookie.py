@@ -267,7 +267,19 @@ def read_cookies(ws: WS) -> dict[str, dict]:
 
     这是关键：CDP 能读到 httpOnly 的 cookie，网页 JS 读不到。
     """
-    res = ws.call("Storage.getCookies", {}, timeout=20)
+    try:
+        res = ws.call("Storage.getCookies", {}, timeout=20)
+    except RuntimeError:
+        # Newer Chrome rejects browser-level Storage.getCookies; read via a page target instead.
+        host, port = ws.sock.getpeername()[:2]
+        with urllib.request.urlopen(f"http://{host}:{port}/json/list", timeout=5) as r:
+            page = next(t for t in json.load(r) if t.get("type") == "page")
+        pws = WS(page["webSocketDebuggerUrl"])
+        try:
+            res = pws.call("Network.getCookies",
+                           {"urls": ["https://muse.ai/", "https://www.muse.ai/"]}, timeout=20)
+        finally:
+            pws.close()
     out: dict[str, dict] = {}
     for c in res.get("cookies", []):
         domain = (c.get("domain") or "").lstrip(".")
@@ -342,7 +354,7 @@ def main() -> int:
         say("✗ 缺少参数。请这样运行：")
         say("    python get_muse_cookie.py --base https://你的域名 --key m2a_xxx")
         say()
-        say("  （这两个值可以在 muse2api 管理页面的「接入信息」里复制）")
+        say("  （这两个值可以在 GemuseAPI 管理页面的「接入信息」里复制）")
         return 2
     if not args.label:
         args.label = "muse-" + time.strftime("%m%d-%H%M")

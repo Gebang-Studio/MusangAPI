@@ -310,6 +310,84 @@ def _open_public_ref_image(url: str):
     raise urllib.error.URLError("参考图重定向次数过多")
 
 
+
+def _stream_safe(text: str) -> str:
+    """Bagian teks yang tidak akan berubah lagi saat muse.ai masih menulis.
+
+    Markdown hasil __md menutup ** ` ``` di ujung; saat teks bertambah penutup itu
+    bergeser, sehingga teks lama bukan lagi awalan teks baru. Baris terakhir ditahan
+    mulai dari penanda pertama supaya delta stream selalu berupa tambahan murni.
+    """
+    if text.endswith("\n```"):
+        text = text[:-4]  # blok kode masih ditulis: baris kode terakhirnya bisa belum lengkap
+    nl = text.rfind("\n") + 1
+    head, tail = text[:nl], text[nl:]
+    m = re.search(r"[*`\[]", tail)
+    return head + (tail[:m.start()] if m else tail)
+
+
+# Balasan muse datang lewat WebSocket terenkripsi (Noise), jadi CDP Network hanya melihat ciphertext.
+# Setelah didekripsi, halaman mem-parse event ndjson dengan JSON.parse: di sinilah markdown mentah bisa dibaca.
+_DELTA_HOOK_JS = """(function(){
+  if (window.__museEvt) return; window.__museEvt = [];
+  var jp = JSON.parse;
+  JSON.parse = function(){
+    var r = jp.apply(this, arguments);
+    try { if (r && typeof r.event === 'string' && (r.event.indexOf('delta.') === 0 || r.event === 'task.status') && window.__museEvt.length < 20000) window.__museEvt.push(r); } catch (e) {}
+    return r;
+  };
+  // File yang dibuat muse diunduh lewat Blob + <a download>: tangkap Blob-nya, dan saat engine sedang mengambil
+  // (__museGrab) jangan biarkan Chromium menyimpan salinan ke folder unduhan.
+  // Blob dicocokkan lewat <a download="nama"> (panel .md juga membuat Blob pratinjau sendiri).
+  window.__museBlobs = {}; window.__museDl = [];
+  var oc = URL.createObjectURL;
+  URL.createObjectURL = function(b){ var u = oc.apply(this, arguments); try { if (b instanceof Blob) window.__museBlobs[u] = b; } catch (e) {} return u; };
+  var ac = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function(){
+    if (this.download && /^blob:/.test(this.href)){ window.__museDl.push({name: this.download, href: this.href}); if (window.__museGrab) return; }
+    return ac.apply(this, arguments);
+  };
+})();"""
+
+
+class _NetReply:
+    """Satu balasan asisten dari event delta.*: markdown mentah, bukan teks hasil render DOM."""
+
+    def __init__(self):
+        self.mid, self.text, self.final, self.done = None, "", None, False
+        self.session, self.files, self.base, self.tasks = None, [], "", {}
+
+    @property
+    def running(self) -> bool:
+        # task.status "running" datang sebelum message_start, jadi dicatat per sesi sejak awal
+        return self.tasks.get(self.session) == "running"
+
+    def feed(self, events: list) -> None:
+        for e in events or []:
+            ev, p = e.get("event"), e.get("payload") or {}
+            if ev == "delta.message_start" and self.mid is None and p.get("transcript_surface") == "main_chat":
+                self.mid, self.session = p.get("message_id"), p.get("session_id")
+            elif (ev == "delta.message_start" and self.done and p.get("session_id") == self.session
+                  and p.get("transcript_surface") == "main_chat" and p.get("message_id") != self.mid):
+                # Muse bisa mengirim pesan lanjutan di sesi yang sama ("saya kirim begitu selesai", lalu isinya).
+                self.base = self.final + ("\n\n" if self.final and not self.final.endswith("\n\n") else "")
+                self.mid, self.text, self.final, self.done = p.get("message_id"), self.base, None, False
+            elif ev == "task.status" and p.get("session_id"):
+                self.tasks[p["session_id"]] = p.get("status")
+            elif ev == "delta.presentation" and p.get("kind") == "file" and self.session and p.get("session_id") == self.session:
+                # File buatan muse datang sebagai widget terpisah (message_id lain), bukan di transcript message_done.
+                f = (p.get("data") or {}).get("file") or {}
+                if f.get("path") and not f.get("missing") and all(x.get("path") != f["path"] for x in self.files):
+                    self.files.append(f)
+            elif self.mid and p.get("message_id") == self.mid:
+                if ev == "delta.text_append":
+                    self.text += p.get("text") or ""
+                elif ev == "delta.message_done":
+                    parts = [c.get("text") or "" for m in (p.get("transcript") or {}).get("messages") or []
+                             if m.get("role") == "assistant" for c in m.get("content") or [] if c.get("type") == "text"]
+                    self.final, self.done = self.base + ("".join(parts) or self.text[len(self.base):]), True
+
+
 class MuseEngine:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -531,6 +609,7 @@ class MuseEngine:
             page.send("Network.enable")
             page.send("Page.enable")
             page.send("Runtime.enable")
+            page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _DELTA_HOOK_JS})
             page.send("Browser.setDownloadBehavior", {
                 "behavior": "allow", "downloadPath": self._new_download_dir(),
                 "browserContextId": ctx_id,
@@ -1508,8 +1587,73 @@ class MuseEngine:
         "if(/hatch-agent-bubble-bg/.test(bs[i].className||''))n++;}"
         "return String(n);})()"
     )
+    # Bubble muse.ai berisi markdown yang sudah dirender; innerText membuang nomor <ol>
+    # dan pagar ``` blok kode. Fungsi ini menyusun ulang markdown-nya dari DOM.
+    _MD_JS = r"""
+function __md(root){
+  var BLOCK=/^(P|DIV|UL|OL|PRE|H[1-6]|BLOCKQUOTE|TABLE|HR|SECTION|ARTICLE|FIGURE)$/;
+  function vis(e){var s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden';}
+  function skip(e){return e.tagName==='BUTTON'||e.tagName==='svg'||e.tagName==='SVG'||e.getAttribute('aria-hidden')==='true'||!vis(e);}
+  function txt(n){
+    var ws=n.parentElement?getComputedStyle(n.parentElement).whiteSpace:'normal';
+    return /^pre/.test(ws)?n.nodeValue:n.nodeValue.replace(/[ \t\r\n\f]+/g,' ');
+  }
+  function inl(n){
+    if(n.nodeType===3)return txt(n);
+    if(n.nodeType!==1||skip(n))return '';
+    var t=n.tagName;
+    if(t==='BR')return '\n';
+    if(t==='CODE')return '`'+n.textContent+'`';
+    var c='';for(var i=0;i<n.childNodes.length;i++)c+=inl(n.childNodes[i]);
+    if(t==='STRONG'||t==='B')return c.trim()?'**'+c+'**':c;
+    if(t==='EM'||t==='I')return c.trim()?'*'+c+'*':c;
+    if(t==='A'){var h=n.getAttribute('href')||'';return /^https?:/.test(h)&&c.trim()?'['+c+']('+h+')':c;}
+    return c;
+  }
+  function hasPre(e){return e.tagName==='PRE'||!!e.querySelector('pre');}
+  function preAfter(e){for(e=e.nextElementSibling;e;e=e.nextElementSibling)if(hasPre(e))return true;return false;}
+  var lang='';
+  function blocks(el){
+    var out=[],buf='',kids=el.childNodes;
+    function flush(){if(buf.trim())out.push(buf.trim());buf='';}
+    for(var i=0;i<kids.length;i++){
+      var n=kids[i];
+      if(n.nodeType===3){buf+=txt(n);continue;}
+      if(n.nodeType!==1||skip(n))continue;
+      var t=n.tagName;
+      if(!BLOCK.test(t)){buf+=inl(n);continue;}
+      flush();
+      // Label bahasa di atas blok kode ("python"; muse menyisipkan div tombol Salin di antaranya) jadi info pagar.
+      var lab=(t!=='DIV'||hasPre(n))?'':inl(n).trim();
+      if(/^[\w+#.-]{1,20}$/.test(lab)&&preAfter(n)){lang=lab;continue;}
+      if(t==='PRE'){
+        var code=n.querySelector('code'),m=/language-([\w+#-]+)/.exec((n.className||'')+' '+(code&&code.className||''));
+        out.push('```'+(m?m[1]:lang)+'\n'+(n.innerText||'').replace(/\n+$/,'')+'\n```');lang='';
+      }else if(/^H[1-6]$/.test(t))out.push('######'.slice(0,+t[1])+' '+inl(n).trim());
+      else if(t==='UL'||t==='OL'){
+        var k=+(n.getAttribute('start')||1),rows=[];
+        for(var j=0;j<n.children.length;j++){
+          var li=n.children[j];if(li.tagName!=='LI'||skip(li))continue;
+          var body=blocks(li).join('\n').replace(/\n/g,'\n   ');
+          rows.push((t==='OL'?(k++)+'. ':'- ')+body);
+        }
+        if(rows.length)out.push(rows.join('\n'));
+      }
+      else if(t==='BLOCKQUOTE')out.push(blocks(n).join('\n\n').replace(/^/gm,'> '));
+      else if(t==='HR')out.push('---');
+      else if(t==='TABLE')out.push((n.innerText||'').trim());
+      else if(t==='P')out.push(inl(n).trim());
+      else out=out.concat(blocks(n));
+    }
+    flush();
+    return out.filter(function(s){return s;});
+  }
+  try{var md=blocks(root).join('\n\n').trim();return md||(root.innerText||'').trim();}
+  catch(e){return (root.innerText||'').trim();}
+}
+"""
     _POLL_CHAT_JS = (
-        "(function(){"
+        "(function(){" + _MD_JS +
         "var els=[...document.querySelectorAll('*')].filter(function(e){"
         "var s=getComputedStyle(e);"
         "return (s.overflowY==='auto'||s.overflowY==='scroll')&&e.scrollHeight>e.clientHeight+100;});"
@@ -1519,7 +1663,7 @@ class MuseEngine:
         "var bs=[].slice.call(scope.querySelectorAll('div[class*=\"hatch-chat-groupable-bubble\"]'))"
         ".filter(function(b){return /hatch-agent-bubble-bg/.test(b.className||'');});"
         "var nonEmpty=bs.filter(function(b){return ((b.innerText||'').trim().length)>0;});"
-        "var txt=nonEmpty.length?(nonEmpty[nonEmpty.length-1].innerText||'').trim():'';"
+        "var txt=nonEmpty.length?__md(nonEmpty[nonEmpty.length-1]):'';"
         "var stop=!!(document.querySelector('[data-testid=\"hatch-composer-stop-button\"]')"
         "||document.querySelector('button[aria-label*=\"Stop\" i]')"
         "||document.querySelector('button[aria-label*=\"停止\"]'));"
@@ -1555,19 +1699,170 @@ class MuseEngine:
             pass
         return 0, "", False
 
+    def _take_events(self) -> list:
+        try:
+            raw = self.page.js("JSON.stringify((window.__museEvt || []).splice(0))")
+            return json.loads(raw) if isinstance(raw, str) else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _net_reply(self, net: "_NetReply", deadline: float, stop_event):
+        sent = ""
+        while time.time() < deadline:
+            if stop_event is not None and stop_event.is_set():
+                return
+            if len(net.text) > len(sent):
+                yield net.text[len(sent):]
+                sent = net.text
+            if net.done:
+                if net.final.startswith(sent):
+                    if net.final[len(sent):]:
+                        yield net.final[len(sent):]
+                else:
+                    log.warning("chat: teks final muse menyimpang dari potongan stream (%d/%d)", len(sent), len(net.final))
+                mid0 = net.mid
+                time.sleep(0.3)  # widget file kadang tiba tepat setelah message_done
+                net.feed(self._take_events())
+                if net.running and net.mid == mid0:
+                    # Task muse masih berjalan: tunggu pesan lanjutan atau task selesai.
+                    # shortcut: maks 180 dtk menunggu lanjutan; naikkan bila muse sering mengirim file lebih lambat.
+                    wait_end = min(deadline, time.time() + 180)
+                    while net.running and net.mid == mid0 and time.time() < wait_end:
+                        if stop_event is not None and stop_event.is_set():
+                            return
+                        time.sleep(0.2)
+                        net.feed(self._take_events())
+                if net.mid != mid0:
+                    continue  # pesan lanjutan: kirim teksnya lewat putaran berikutnya
+                for f in net.files:
+                    yield self._chat_file_link(f)
+                return
+            time.sleep(0.05)
+            net.feed(self._take_events())
+        raise MuseGenerationError("等待助手回复超时")
+
+    # Set by the app: save(label, mime, data) -> URL. Tanpa sink, file muse tidak bisa diteruskan ke klien.
+    file_sink = None
+    CHAT_FILE_MAX = 50 << 20  # lewat CDP sebagai base64; file lebih besar dilaporkan, tidak diambil
+
+    # Kartu file di bubble -> panel editor -> "More actions" -> Download. Muse membuat Blob dari gateway fs
+    # (URL *.metaaivm.com tidak bisa di-resolve dari browser ini), hook di _DELTA_HOOK_JS menangkap Blob itu.
+    # Menu Radix terbuka pada pointerdown, bukan click.
+    _GRAB_FILE_JS = r"""(async function(path, size, label, alt){
+      var sleep = function(ms){ return new Promise(function(r){ setTimeout(r, ms); }); };
+      var until = async function(fn, ms){ var end = Date.now() + ms; while (Date.now() < end){ var v = fn(); if (v) return v; await sleep(100); } return null; };
+      var press = function(el){ var r = el.getBoundingClientRect(), o = {bubbles:true, cancelable:true, button:0, buttons:1, pointerType:'mouse', clientX:r.x + r.width/2, clientY:r.y + r.height/2};
+        el.dispatchEvent(new PointerEvent('pointerdown', o)); el.dispatchEvent(new MouseEvent('mousedown', o));
+        el.dispatchEvent(new PointerEvent('pointerup', o)); el.dispatchEvent(new MouseEvent('mouseup', o)); el.click(); };
+      var q = function(t){ return document.querySelector('[data-testid="' + t + '"]'); };
+      var hex = Array.from(new TextEncoder().encode(path)).map(function(b){ return b.toString(16).padStart(2, '0'); }).join('');
+      var card = await until(function(){ return q('hatch-chat-file-card-' + hex); }, 8000);
+      if (!card) return JSON.stringify({ok:false, err:'no-card'});
+      window.__museGrab = true; var n0 = (window.__museDl || []).length;
+      try {
+        press(card);
+        var more = await until(function(){ return q('hatch-file-editor-more-actions'); }, 8000);
+        if (!more) return JSON.stringify({ok:false, err:'no-editor'});
+        var mine = function(){ return (window.__museDl || []).slice(n0).find(function(d){ return d.name === label || d.name === alt; }); };
+        var hit = null, step = '';
+        // Percobaan kedua: item Download bisa belum aktif saat isi file masih dimuat dari gateway.
+        for (var attempt = 0; attempt < 2 && !hit; attempt++){
+          var direct = q('hatch-file-editor-unsupported-download');
+          if (direct){ press(direct); step = 'direct'; }
+          else { press(q('hatch-file-editor-more-actions'));
+            var dl = await until(function(){ return q('hatch-file-editor-download'); }, 4000);
+            if (!dl){ step = 'no-menu-item'; await sleep(1500); continue; }
+            press(dl); step = 'menu'; }
+          hit = await until(mine, attempt ? 60000 : 15000);
+        }
+        var b = hit && (window.__museBlobs || {})[hit.href];
+        if (!b) return JSON.stringify({ok:false, err:'no-blob setelah ' + step + ' ' + JSON.stringify((window.__museDl || []).slice(n0).map(function(d){ return d.name; }))});
+        if (size && b.size !== size) return JSON.stringify({ok:false, err:'size ' + b.size + '/' + size});
+        var u8 = new Uint8Array(await b.arrayBuffer()), s = '';
+        for (var i = 0; i < u8.length; i += 65536) s += String.fromCharCode.apply(null, u8.subarray(i, i + 65536));
+        return JSON.stringify({ok:true, mime:b.type || '', b64:btoa(s)});
+      } finally {
+        window.__museGrab = false;
+        var c = q('hatch-file-editor-close'); if (c) press(c);
+      }
+    })(%s, %s, %s, %s)"""
+
+    def _chat_file_link(self, f: dict) -> str:
+        """Ambil satu file buatan muse dan kembalikan tautan markdown; gagal -> kalimat yang jelas, bukan diam."""
+        path = re.sub(r"^sandbox://", "", f["path"])
+        # label = nama tampilan ("Sholawat Penyejuk Hati txt"); muse mengunduh dengan nama file di path
+        # ("Sholawat-Penyejuk-Hati.txt"), yang juga membawa ekstensinya.
+        label = os.path.basename(path) or f.get("label") or "file"
+        size = int(f.get("byte_len") or 0)
+        try:
+            if not self.file_sink:
+                raise MuseGenerationError("file_sink belum dipasang")
+            if size > self.CHAT_FILE_MAX:
+                raise MuseGenerationError(f"{size} byte, melebihi batas {self.CHAT_FILE_MAX}")
+            raw = self.page.js(self._GRAB_FILE_JS % (json.dumps(path), size, json.dumps(label), json.dumps(f.get("label") or "")),
+                               await_promise=True, timeout=120)
+            # Bukan string = evaluate tidak mengembalikan nilai (mis. exceptionDetails): simpan apa adanya untuk diagnosis.
+            info = json.loads(raw) if isinstance(raw, str) else {"ok": False, "err": "cdp " + json.dumps(raw, ensure_ascii=False, default=str)[:300]}
+            if not info.get("ok"):
+                raise MuseGenerationError(info.get("err") or "gagal")
+            url = self.file_sink(label, f.get("mime") or info.get("mime") or "", base64.b64decode(info["b64"]))
+            safe = re.sub(r"[][()\n]", "_", label)  # label dari muse tidak boleh merusak tautan markdown
+            return f"\n\n[{safe}]({url})"
+        except Exception as e:  # noqa: BLE001
+            log.warning("chat: file %s tidak bisa diambil dari muse: %s", label, e)
+            return f"\n\n_(File {label} dibuat muse tetapi tidak bisa diambil: {e})_"
+
     def chat_stream(self, cookies: dict, prompt: str, expires: dict | None = None,
                     timeout: int | None = None, account_id: str | None = None,
-                    stop_event=None):
-        """发一条消息，流式 yield 增量文本。"""
+                    stop_event=None, images: list[str] | None = None):
+        """发一条消息，流式 yield 增量文本。images：随消息附上的图片（data URL），用于"图里是什么"类提问。"""
+        upload = {}
+        try:
+            yield from self._chat_stream(cookies, prompt, expires, timeout, account_id, stop_event, images, upload)
+        finally:
+            # 与 generate 相同：临时文件在整轮结束后才删（Chromium 在发送时读取）。
+            if upload.get("dir"):
+                shutil.rmtree(upload["dir"], ignore_errors=True)
+
+    def _chat_stream(self, cookies, prompt, expires, timeout, account_id, stop_event, images, upload):
         timeout = int(timeout or getattr(self.cfg, "chat_timeout", 300))
         self.ensure_page(cookies, expires, account_id=account_id)
         self.reset_thread(for_chat=True)
         base_agent, base_text, _ = self._poll_chat()
+        if images:
+            upload.update(self._attach_images(images) or {})
+        self._take_events()  # buang event giliran sebelumnya
         self._send(prompt)
 
         t_sent = time.time()
         deadline = t_sent + timeout
         first_token_deadline = min(deadline, t_sent + 40.0)
+
+        # 0. Jalur utama: event delta.* (markdown mentah, lengkap). DOM hanya cadangan bila event tak muncul
+        #    2 dtk setelah teks terlihat di layar (hook rusak / muse ganti format).
+        net, dom_seen = _NetReply(), None
+        while time.time() < first_token_deadline:
+            if stop_event is not None and stop_event.is_set():
+                return
+            net.feed(self._take_events())
+            if net.mid:
+                yield from self._net_reply(net, deadline, stop_event)
+                return
+            cnt, cur, _ = self._poll_chat()
+            if cur and not (cnt <= base_agent and cur == base_text):
+                dom_seen = dom_seen or time.time()
+                if time.time() - dom_seen > 2.0:
+                    log.warning("chat: event delta.* tidak terlihat, kembali membaca DOM")
+                    break
+            elif time.time() - t_sent > 14.0:
+                try:
+                    tail = self.page.js("document.body.innerText.slice(-500)") or ""
+                except Exception:  # noqa: BLE001
+                    tail = ""
+                if "Still sending" in tail or "Connecting..." in tail:
+                    raise MuseGenerationError("云端 VM 连接超时 (Still sending)")
+            time.sleep(0.06)
+
         sent, last, stable = "", None, 0
         got_first = False
 
@@ -1587,13 +1882,15 @@ class MuseEngine:
                         raise MuseGenerationError("云端 VM 连接超时 (Still sending)")
                 continue
 
-            delta = cur[len(sent):] if cur.startswith(sent) else cur
+            safe = _stream_safe(cur)
+            delta = safe[len(sent):] if safe.startswith(sent) else ""  # bukan kelanjutan = muse sedang merender ulang; tunggu poll berikutnya
             if delta:
-                sent = cur
+                sent = safe
                 yield delta
-                last = cur
-                got_first = True
-                break
+            # Teks sudah muncul walau seluruhnya masih ditahan (mis. satu baris "**Ya**"); fase 2 yang mengirimnya.
+            last = cur
+            got_first = True
+            break
 
         if not got_first:
             raise MuseGenerationError("等待助手首字响应超时")
@@ -1608,18 +1905,24 @@ class MuseEngine:
                 continue
 
             if cur != last:
-                delta = cur[len(sent):] if cur.startswith(sent) else cur
+                safe = _stream_safe(cur)
+                delta = safe[len(sent):] if safe.startswith(sent) else ""
                 if delta:
-                    sent = cur
+                    sent = safe
                     yield delta
                 last, stable = cur, 0
             else:
                 stable += 1
                 # Stop 按钮消失说明前端生成彻底结束，连续 3 次（约 0.18s）无新文本即正常退出
-                if not has_stop and stable >= 3:
-                    return
                 # Stop 按钮仍在时绝不过早截断（模型思考、代码块或网络抖动），允许等待至 stable >= 80（约 5s）防卡死
-                if has_stop and stable >= 80:
+                if (not has_stop and stable >= 3) or (has_stop and stable >= 80):
+                    # Sisa yang ditahan _stream_safe (penutup ** ` ```) dikirim saat selesai.
+                    common = len(os.path.commonprefix([sent, cur]))
+                    if common < len(sent):
+                        log.warning("chat stream: teks akhir menyimpang dari yang terkirim (%d/%d)", common, len(sent))
+                    tail = cur[len(sent):]  # tanpa mengulang yang sudah terkirim
+                    if tail:
+                        yield tail
                     return
 
         raise MuseGenerationError("等待助手回复超时")
@@ -1671,7 +1974,7 @@ class MuseEngine:
           dialog:!!m.closest('[role=dialog],[aria-modal=true]')};
       });
       return JSON.stringify(best);
-    })(%s, %s)"""
+    })(%s, %s, %s, %s)"""
     _CLOSE_VIEWER_JS = (
         "(function(){var t=document.activeElement||document.body;"
         "['keydown','keyup'].forEach(function(k){t.dispatchEvent(new KeyboardEvent(k,"

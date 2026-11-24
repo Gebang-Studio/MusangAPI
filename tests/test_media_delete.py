@@ -118,6 +118,34 @@ async def main():
             res = await client.delete("/admin/media/nonexistent.webp")
             assert res.status_code == 404
 
+            # 6. Frame terakhir video (x_last.png) bukan kartu sendiri, dan ikut terhapus bersama videonya.
+            for n in ("clip.mp4", "clip_last.png", "orphan_last.png"):
+                Path(media_dir, n).write_bytes(b"x")
+            names = {m["name"] for m in (await client.get("/admin/media")).json()["media"]}
+            assert "clip.mp4" in names and "clip_last.png" not in names, names
+            assert "orphan_last.png" in names, names  # tanpa videonya: tetap tampil supaya bisa dihapus
+            res = await client.post("/admin/media/delete", json_data={"names": ["clip.mp4"]})
+            assert res.json()["removed"] == 1
+            assert not os.path.exists(os.path.join(media_dir, "clip_last.png"))
+            assert os.path.exists(os.path.join(media_dir, "orphan_last.png"))
+
+            # 7. Unduh terpilih -> satu ZIP; nama di dalam = judul prompt (karakter terlarang dibuang) + 8 huruf hash.
+            import glob, io, zipfile
+            Path(media_dir, "abcdef1234.mp4").write_bytes(b"video-bytes")
+            Path(media_dir, "noprompt99.png").write_bytes(b"png-bytes")
+            module.store.tasks["t_zip"] = {"result": {"filename": "abcdef1234.mp4"},
+                                           "prompt": "**01. Jalan: Tol/Semarang***\nEarly morning dashcam"}
+            leftovers = set(glob.glob(os.path.join(tempfile.gettempdir(), "muse2api-media-*.zip")))
+            res = await client.post("/admin/media/zip", json_data={"names": ["abcdef1234.mp4", "noprompt99.png", "abcdef1234.mp4"]})
+            assert res.status_code == 200, res.body
+            z = zipfile.ZipFile(io.BytesIO(res.body))
+            assert sorted(z.namelist()) == ["01. Jalan Tol Semarang-abcdef12.mp4", "noprompt99.png"], z.namelist()
+            assert z.read("01. Jalan Tol Semarang-abcdef12.mp4") == b"video-bytes"
+            assert set(glob.glob(os.path.join(tempfile.gettempdir(), "muse2api-media-*.zip"))) == leftovers, "zip sementara tertinggal"
+            assert (await client.post("/admin/media/zip", json_data={"names": ["../accounts.json"]})).status_code == 400
+            assert (await client.post("/admin/media/zip", json_data={"names": []})).status_code == 400
+            assert (await client.post("/admin/media/zip", json_data={"names": ["tidakada.mp4"]})).status_code == 404
+
     print("PASS: all media deletion tests passed!")
 
 

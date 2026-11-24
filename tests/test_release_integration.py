@@ -49,7 +49,7 @@ class ReleaseIntegrationTests(unittest.TestCase):
 
     def test_new_modules_are_in_docker_and_maintainer_copy_lists(self):
         docker=(ROOT/'Dockerfile').read_text()
-        for name in ['generation_timing.py','thumbnails.py']:
+        for name in ['generation_timing.py','thumbnails.py','intent.py','memory.py']:
             self.assertIn(name,docker);self.assertIn(name,app.TRACKED_REPO_PATHS)
         for name in ['GENERATION_QUEUE.md','VERSION_REPORTING.md']:
             self.assertIn(name,app.TRACKED_REPO_PATHS)
