@@ -445,6 +445,49 @@ class MuseEngine:
     def _debug_url(self):
         return f"http://127.0.0.1:{self.cfg.cdp_port}/json/version"
 
+    def _android_front_ui_tab(self) -> str | None:
+        """Tab UI GemuseAPI (localhost) yang sedang tampil di Chrome Android, untuk dikembalikan ke depan.
+        shortcut: hanya tab di 127.0.0.1/localhost yang diperiksa; tab situs lain tetap tertutup tab muse.
+        Kalau perlu semua tab, periksa visibilityState tiap tab (mahal dan bisa memuat ulang tab yang dibuang)."""
+        try:
+            tabs = http_json(f"http://127.0.0.1:{self.cfg.cdp_port}/json/list", timeout=2) or []
+        except Exception:
+            return None
+        for t in tabs:
+            if t.get("type") != "page" or not re.match(r"https?://(127\.0\.0\.1|localhost)[:/]", t.get("url", "")):
+                continue
+            probe = None
+            try:
+                probe = CDP(f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{t['id']}", timeout=3)
+                if probe.js("document.visibilityState", timeout=3) == "visible":
+                    return t["id"]
+            except Exception:
+                pass
+            finally:
+                if probe:
+                    probe.close()
+        return None
+
+    def _android_refocus(self, tab_id: str):
+        """Chrome Android selalu memindahkan layar ke tab baru (background=True diabaikan), sekitar 0,2 dtk
+        SETELAH createTarget kembali. activateTarget sebelum itu tertimpa, jadi tunggu tabnya tersembunyi dulu."""
+        probe = None
+        try:
+            probe = CDP(f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{tab_id}", timeout=3)
+            deadline = time.time() + 2
+            while time.time() < deadline and probe.js("document.visibilityState", timeout=2) == "visible":
+                time.sleep(0.05)
+            for _ in range(5):
+                self.browser.send("Target.activateTarget", {"targetId": tab_id})
+                time.sleep(0.3)
+                if probe.js("document.visibilityState", timeout=2) == "visible":
+                    return
+        except Exception as e:
+            log.warning("Gagal mengembalikan tab UI ke depan di Chrome Android: %s", e)
+        finally:
+            if probe:
+                probe.close()
+
     def start(self):
         with self._start_lock:
             if self.proc and self.proc.poll() is None and self.browser:
@@ -616,12 +659,15 @@ class MuseEngine:
             self.current_context_id = ctx_id
             with self._contexts_lock:
                 self._active_contexts.add(ctx_id)
+            front = self._android_front_ui_tab() if self.android else None
             t_res = self.browser.send("Target.createTarget", {
                 "url": "about:blank", "browserContextId": ctx_id,
             })
             target_id = t_res.get("result", {}).get("targetId")
             if not target_id:
                 raise MuseGenerationError("Chromium 未返回独立页面 ID")
+            if front:
+                self._android_refocus(front)
             ws_url = f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{target_id}"
             page = CDP(ws_url, timeout=180)
             page.send("Network.enable")
