@@ -78,7 +78,7 @@ class GenerationQueueTests(unittest.TestCase):
 
     def test_failed_job_keeps_account_and_durations(self):
         with patch.object(app.engine,'generate',side_effect=app.MuseModelRefusalError('只有文字，无媒体')):
-            result=asyncio.run(app.create_video(app.VideoRequest(prompt='x')))
+            result=asyncio.run(app.create_video(app.VideoRequest(prompt='x'), idempotency_key=None))
             until=time.monotonic()+2
             while app.store.get_task(result['id'])['status'] in ['queued','processing'] and time.monotonic()<until:time.sleep(.01)
         task=app.store.get_task(result['id'])

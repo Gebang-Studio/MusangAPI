@@ -245,6 +245,21 @@ async def check(source, home):
         assert conflict.status_code == 409
         print("dedicated_task_endpoint=PASS idempotency_reuse=PASS conflict_rejected=PASS")
 
+        # Batch chat: tab dimuat ulang / dua tab mengirim template yang sama -> satu tugas video, bukan dua.
+        count = len(calls)
+        first = await client.post("/v1/videos", json={"prompt": "batch video 01"}, headers={"Idempotency-Key": "vid-01.0"})
+        again = await client.post("/v1/videos", json={"prompt": "batch video 01"}, headers={"Idempotency-Key": "vid-01.0"})
+        assert first.status_code == 200 and again.json()["id"] == first.json()["id"], (first.body, again.body)
+        other = await client.post("/v1/videos", json={"prompt": "batch video 01"}, headers={"Idempotency-Key": "vid-01.1"})
+        assert other.json()["id"] != first.json()["id"]
+        for tid_ in (first.json()["id"], other.json()["id"]):
+            for _ in range(100):
+                if (await client.get("/v1/videos/" + tid_)).json()["status"] in ("completed", "failed"):
+                    break
+                await asyncio.sleep(0.02)
+        assert len(calls) == count + 2, (len(calls), count)
+        print("video_idempotency=PASS")
+
         response = await client.post("/v1/images/generations", json={"prompt": "sync compatible"})
         assert response.status_code == 200 and response.json()["data"]
         response = await client.post("/v1/images/edits", json={"prompt": "sync compatible", "async": False})

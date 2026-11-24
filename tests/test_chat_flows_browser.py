@@ -33,7 +33,8 @@ subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=siz
                 "-pix_fmt", "yuv420p", MP4], check=True)
 
 LOG = {"chat": 0, "media": [], "deleted": []}
-TASKS = {}
+TASKS, KEYS = {}, {}
+BATCH = (ROOT / "tests" / "fixtures" / "batch_100_templates.txt").read_text(encoding="utf-8")
 ERR500 = "模型未生成媒体，仅返回文本: 生成失败了，没能做出这段视频。系统返回了一个内部错误（500），不是提示词或规格的问题。"
 REGION = "没有可生成视频的账号：所有账号均被 Meta 拒绝视频 (video_not_available)"
 OUTAGE = "MUSE_OUTAGE video 2 12:07 12:17：muse 媒体服务连续 2 次返回 5xx（最近 12:07），为免空等约 7 分钟，本次未发送；12:17 后自动恢复尝试"
@@ -86,6 +87,7 @@ class Fake(BaseHTTPRequestHandler):
             t["polls"] += 1
             if t["polls"] < t["need"]:
                 return self.send_json({"id": tid, "status": "processing"})
+            t["done"] = True
             if t["error"]:
                 return self.send_json({"id": tid, "status": "failed", "error": t["error"]})
             url = "/v1/media/out.png" if t["kind"] == "image" else "/v1/media/out.mp4"
@@ -102,9 +104,16 @@ class Fake(BaseHTTPRequestHandler):
             return self.send_json(classify(b["text"], b.get("last_kind"), b.get("attachments", 0)))
         if p in ("/v1/images/tasks", "/v1/videos"):
             kind = "image" if "images" in p else "video"
-            LOG["media"].append({"kind": kind, **b})
+            key = self.headers.get("Idempotency-Key")
+            if key and key in KEYS:  # seperti server asli: kunci sama -> tugas yang sama
+                return self.send_json({"id": KEYS[key], "status": "queued"})
+            LOG["media"].append({"kind": kind, "key": key, **b})
             pr = b["prompt"]
             tid = f"t{len(TASKS) + 1}"
+            if key:
+                KEYS[key] = tid
+            live = sum(1 for t in TASKS.values() if not t.get("done")) + 1
+            LOG["live_max"] = max(LOG.get("live_max", 0), live)
             TASKS[tid] = {"kind": kind, "polls": 0, "need": 3 if "LAMA" in pr else 1,
                           "error": ERR500 if "ERR500" in pr else REGION if "WILAYAH" in pr else OUTAGE if "GANGGUAN" in pr else None}
             return self.send_json({"id": tid, "status": "queued"})
@@ -471,6 +480,76 @@ try:
     ok("?key= tersimpan ke localStorage & hilang dari URL",
        J(f"localStorage.getItem('muse2api_key')==={json.dumps(KEY)} && !location.search.includes('key')"),
        json.dumps([J("location.href"), J("localStorage.getItem('muse2api_key')")]))
+    # 18. "buatkan semua" + 100 template (pesan asli) -> konfirmasi -> 100 video terpisah, maks 3 berjalan
+    for t in TASKS.values():
+        t["done"] = True
+    LOG["live_max"] = 0
+    go, stop = "document.querySelector('[data-batch=go]')", "document.querySelector('[data-batch=stop]')"
+    boot()
+    before = len(LOG["media"])
+    say(BATCH)
+    until("!!" + go, 8)
+    ok("100 template -> konfirmasi dulu, belum ada tugas",
+       J(f"({go}||{{}}).textContent||''") == "Buat 100 video" and len(LOG["media"]) == before, json.dumps([J(f"({go}||{{}}).textContent||''"), len(LOG["media"]) - before]))
+    shot("batch")
+    js(go + ".click()")
+    until("document.querySelectorAll('.msg.assistant video').length===100", 120)
+    shot("batch")
+    sent = LOG["media"][before:]
+    ok("100 tugas video, satu per template, prompt bersih",
+       len(sent) == 100 and all(m["kind"] == "video" for m in sent) and len({m["prompt"] for m in sent}) == 100
+       and all("buatkan semua" not in m["prompt"] and len(m["prompt"]) < 600 for m in sent), str(len(sent)))
+    ok("urutan = nomor template", bool(sent) and sent[0]["prompt"].startswith("Jalan Tol Trans Jawa") and sent[-1]["prompt"].startswith("Jalan Raya Sorong"))
+    ok("maks 3 tugas berjalan bersamaan", 0 < LOG["live_max"] <= 3, str(LOG["live_max"]))
+    ok("100 kartu berlabel nomor template", J("[...document.querySelectorAll('.msg.assistant .bubble p')].filter(p=>/^\\d{2,3}\\. /.test(p.textContent)).length") == 100)
+    ok("tiap tugas punya Idempotency-Key unik", len({m["key"] for m in sent if m["key"]}) == 100)
+    boot(clear=False)
+    time.sleep(1.5)
+    ok("muat ulang setelah selesai -> tidak ada tugas ulang", len(LOG["media"]) - before == 100, str(len(LOG["media"]) - before))
+    # 18b. muat ulang di tengah batch -> lanjut tanpa duplikat
+    six = "buatkan video:\n" + "\n".join(f"{i}. LAMA video mobil melaju di jalan tol nomor {i}" for i in range(1, 7))
+    boot()
+    before = len(LOG["media"])
+    say(six)
+    until("!!" + go, 8)
+    js(go + ".click()")
+    end = time.time() + 5
+    while len(LOG["media"]) - before < 1 and time.time() < end:
+        time.sleep(0.05)
+    boot(clear=False)
+    js("openChat(JSON.parse(localStorage.getItem('muse2api_chats')).find(c=>c.messages.some(m=>m.batch_of)).id)")
+    until("document.querySelectorAll('.msg.assistant video').length===6", 60)
+    ok("muat ulang di tengah batch -> 6 video, 6 tugas (tanpa duplikat)",
+       J("document.querySelectorAll('.msg.assistant video').length") == 6 and len(LOG["media"]) - before == 6,
+       json.dumps([len(LOG["media"]) - before, J("JSON.parse(localStorage.getItem('muse2api_chats')).flatMap(c=>c.messages).filter(m=>m.batch_of).map(m=>[m.pending,!!m.task,!!m.url,m.error||'',m.note])")]))
+    # 18c. Hentikan sisa + Coba lagi per item
+    boot()
+    before = len(LOG["media"])
+    say(six)
+    until("!!" + go, 8)
+    js(go + ".click()")
+    until("!!" + stop, 3)
+    js(stop + ".click()")
+    until("document.querySelectorAll('.msg.assistant video').length>=1 && !" + stop, 30)
+    time.sleep(0.5)
+    n_sent = len(LOG["media"]) - before
+    n_cancel = J("[...document.querySelectorAll('.msg.assistant .err')].filter(e=>e.textContent.includes('Dibatalkan')).length")
+    ok("Hentikan sisa -> sisa tidak dikirim", n_sent <= 3 and n_sent + n_cancel == 6, json.dumps([n_sent, n_cancel]))
+    js("[...document.querySelectorAll('.msg.assistant .err')].find(e=>e.textContent.includes('Dibatalkan')).querySelector('button').click()")
+    until("document.querySelectorAll('.msg.assistant video').length===" + str(n_sent + 1), 30)
+    ok("Coba lagi pada satu item -> tepat 1 tugas baru", len(LOG["media"]) - before == n_sent + 1, str(len(LOG["media"]) - before))
+    # 18d. Batal -> tidak ada tugas; satu video tetap satu tugas tanpa konfirmasi
+    boot()
+    before = len(LOG["media"])
+    say("buatkan video:\n1. video kucing berlari\n2. video anjing melompat")
+    until("!!" + go, 8)
+    ok("2 template -> tombol 'Buat 2 video'", J(f"({go}||{{}}).textContent||''") == "Buat 2 video")
+    js("document.querySelector('[data-batch=no]').click()")
+    time.sleep(0.5)
+    ok("Batal -> tidak ada tugas", len(LOG["media"]) == before and not J("!!" + go))
+    say("buatkan video kucing berlari di taman")
+    until("document.querySelectorAll('.msg.assistant video').length===1", 15)
+    ok("satu video -> satu tugas, tanpa konfirmasi", len(LOG["media"]) - before == 1, str(len(LOG["media"]) - before))
     # 17. key salah
     boot(key="salah", clear=True)
     say("halo")

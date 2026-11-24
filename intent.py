@@ -74,6 +74,29 @@ def parse_media_spec(text: str) -> dict:
             "resolution": res.group(1).lower() if res else None}
 
 
+_ITEM = re.compile(r"^[ \t]*(?:\*\*)?(\d{1,3})[.)][ \t]+(.+?)(?:\*\*)?[ \t]*$", re.M)
+_ITEM_END = re.compile(r"^[ \t]*(?:#|-{3,}|\*{3,}|_{3,})", re.M)  # judul bagian / garis pemisah menutup template
+
+
+def split_items(text: str) -> tuple[str, list[dict]]:
+    """Daftar bernomor ("**01. Judul**\\nprompt" atau "1. prompt") -> (teks sebelum daftar, satu dict per item).
+
+    Nomor harus naik tanpa duplikat; selain itu bukan daftar (mis. "3. ... 1. ...")."""
+    t = text or ""
+    found = list(_ITEM.finditer(t))
+    nums = [int(m.group(1)) for m in found]
+    if len(found) < 2 or nums != sorted(set(nums)):
+        return t, []
+    items = []
+    for m, nxt in zip(found, found[1:] + [None]):
+        body = t[m.end():nxt.start() if nxt else len(t)]
+        body = _ITEM_END.split(body, 1)[0].strip()
+        title = m.group(2).strip().strip("*").strip()
+        prompt = title + ("\n" + body if body else "")
+        items.append({"n": int(m.group(1)), "title": title, "prompt": prompt, **parse_media_spec(prompt)})
+    return t[:found[0].start()], items
+
+
 def is_continuation(text: str) -> bool:
     return bool(_CONTINUE.search(text or "") or _CONTINUE_CJK.search(text or ""))
 
@@ -115,8 +138,16 @@ def classify(text: str, last_kind: str | None = None, attachments: int = 0) -> d
             kind, reason = "chat", "percakapan"
         if attachments and kind == "chat" and reason != "pertanyaan":
             kind, reason = "image", "gambar acuan"
+    head, items = split_items(prompt)
+    if items and not reason.startswith("perintah /"):
+        # "buatkan semua" + daftar: jenis dari kalimat perintah ("buatkan video:"), bila tidak disebut dari template pertama.
+        if _VERB.search(head) or _VERB_CJK.search(head):
+            k = classify(head)["kind"] if head.strip() else "chat"
+            k = k if k != "chat" else classify(items[0]["prompt"])["kind"]
+            if k != "chat":
+                kind, reason = k, f"daftar {len(items)} template"
     return {"kind": kind, "prompt": prompt, "reason": reason,
-            "continue": cont and kind != "chat", **parse_media_spec(prompt)}
+            "continue": cont and kind != "chat", "items": items, **parse_media_spec(prompt)}
 
 
 _AI_ANSWER = re.compile(r"\b(chat|image|video)\b", re.I)

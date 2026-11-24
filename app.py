@@ -1541,8 +1541,8 @@ def intent(req: IntentRequest, _=Depends(auth)):
 
     Jenis diputuskan model chat muse yang membaca konteks; heuristik kata kunci hanya cadangan bila muse gagal."""
     out = classify(req.text, req.last_kind, req.attachments)
-    if out["reason"].startswith("perintah /"):
-        return out  # /video, /gambar, /chat: pilihan eksplisit pengguna
+    if out["reason"].startswith(("perintah /", "daftar ")):
+        return out  # /video, /gambar, /chat, atau "buatkan semua" + daftar: pilihan eksplisit pengguna
     try:
         kind = ai_kind(_ask_muse(ai_prompt(req.text, req.history, req.attachments)))
     except Exception as exc:  # noqa: BLE001 - router tidak boleh menggagalkan pesan
@@ -1738,7 +1738,9 @@ async def images_edits(request: Request, _=Depends(auth)):
 # ------------------------- 生视频（异步任务） -------------------------
 @app.post("/v1/videos")
 @app.post("/v1/videos/generations")
-async def create_video(req: VideoRequest, _=Depends(auth)):
+async def create_video(req: VideoRequest, idempotency_key: str | None = Header(default=None), _=Depends(auth)):
+    if idempotency_key and len(idempotency_key) > 256:
+        raise HTTPException(400, "Idempotency-Key too long")
     user_prompt = req.prompt
     preferred = _apply_memory(req)
     ref_images = await asyncio.to_thread(
@@ -1746,8 +1748,14 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
     _require_prompt(req.prompt, ref_images)
     prompt = build_video_prompt(req, _reference_kinds(ref_images))
     timeout = req.timeout or CFG.video_timeout
+    # Cek + buat tanpa await di antaranya: atomik di event loop, jadi kunci yang sama (tab dimuat ulang, dua tab) = satu tugas.
+    if idempotency_key:
+        hit = next((t for t in list(store.tasks.values()) if t.get("video_request_key") == idempotency_key), None)
+        if hit:
+            return {"id": hit["id"], "task_id": hit["id"], "object": "video.task", "status": hit["status"],
+                    "progress": hit.get("progress", 0), "created_at": hit["created_at"]}
     task = store.create_task("video", req.prompt)
-    store.update_task(task["id"], api_prompt=prompt, queue_elapsed=0.0)
+    store.update_task(task["id"], api_prompt=prompt, queue_elapsed=0.0, video_request_key=idempotency_key)
 
     store.update_task(task["id"], progress=10)
 

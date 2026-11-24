@@ -123,6 +123,7 @@
   .wrap{width:100%;min-width:0}
   .stamp{text-align:center;font-size:12px;line-height:16px;color:var(--muted);margin:24px 0 8px}
   .note{font-size:13px;color:var(--muted);margin-top:8px}
+  .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
   .msg.assistant .bubble:empty{display:none}
   .err{background:var(--bad-bg);color:var(--bad);border-radius:14px;padding:10px 14px;font-size:14px;line-height:20px;margin-top:8px;display:flex;gap:12px;align-items:flex-start;justify-content:space-between}
   .err button{color:var(--text);text-decoration:underline;white-space:nowrap;font-size:14px}
@@ -493,6 +494,7 @@ function msgEl(m, i){
   wrap.appendChild(b);
   row.appendChild(m.role === 'assistant' ? wrap : b);
   row._b = b; row._w = wrap;
+  if (m.id) row.dataset.mid = m.id;  // item batch dicat ulang sendiri, tanpa render() yang memuat ulang semua video
   paint(row, m, i);
   return row;
 }
@@ -520,7 +522,7 @@ function paint(row, m, i){
     if (m.url){
       const el = document.createElement(m.kind === 'image' ? 'img' : 'video');
       el.className = 'media'; el.src = m.url;
-      if (m.kind === 'image') el.alt = 'Gambar hasil: ' + (m.prompt || ''); else { el.controls = true; el.playsInline = true; }
+      if (m.kind === 'image') el.alt = 'Gambar hasil: ' + (m.prompt || ''); else { el.controls = true; el.playsInline = true; el.preload = 'metadata'; }
       b.appendChild(el);
     }
   } else if (m.pending && !m.content){
@@ -529,12 +531,24 @@ function paint(row, m, i){
     b.innerHTML = md(m.content || '');
     if (m.pending) (b.lastElementChild || b).classList.add('caret');
   }
-  w.querySelectorAll('.note,.err,.tools').forEach(n => n.remove());
+  w.querySelectorAll('.note,.err,.tools,.acts').forEach(n => n.remove());
   if (m.note){ const n = document.createElement('div'); n.className = 'note'; n.textContent = m.note; w.appendChild(n); }
+  if (m.batch){
+    const b = m.batch, a = document.createElement('div'); a.className = 'acts';
+    const btn = (label, key, fn, primary) => { const x = document.createElement('button'); x.className = 'btn' + (primary ? ' primary' : ''); x.textContent = label; x.dataset.batch = key; x.onclick = fn; a.appendChild(x); };
+    if (b.state === 'ask'){
+      btn('Buat ' + b.items.length + ' ' + KIND_LABEL[b.kind].toLowerCase(), 'go', () => startBatch(cur, m), true);
+      btn('Batal', 'no', () => { b.state = 'no'; m.content += '\n\nDibatalkan, tidak ada yang dibuat.'; persist(); render(); });
+    } else if (b.state === 'run' && cur.messages.some(x => x.batch_of === m.id && x.pending && !x.task)){
+      btn('Hentikan sisa', 'stop', () => stopBatch(cur, m));
+    }
+    if (a.childElementCount) w.appendChild(a);
+  }
   if (m.error){
     const e = document.createElement('div'); e.className = 'err'; e.setAttribute('role', 'alert');
     const t = document.createElement('span'); t.textContent = m.error; e.appendChild(t);
     if (m.error === KEY_MSG){ const k = document.createElement('button'); k.textContent = 'Isi API Key'; k.onclick = openKey; e.appendChild(k); }
+    else if (m.batch_of){ const r = document.createElement('button'); r.textContent = 'Coba lagi'; r.onclick = () => retryItem(cur, m); e.appendChild(r); }
     else if (i === cur.messages.length - 1){ const r = document.createElement('button'); r.textContent = 'Coba lagi'; r.onclick = retry; e.appendChild(r); }
     w.appendChild(e);
   }
@@ -544,7 +558,7 @@ function paint(row, m, i){
     c.onclick = () => copy(m.url ? location.origin + m.url : m.content, c);
     t.appendChild(c);
     if (m.url){ const a = document.createElement('a'); a.className = 'mini'; a.href = m.url; a.download = ''; a.innerHTML = ICON.down + 'Unduh'; t.appendChild(a); }
-    if (i === cur.messages.length - 1 && !busy){
+    if (i === cur.messages.length - 1 && !busy && !m.batch_of){
       const r = document.createElement('button'); r.className = 'mini'; r.innerHTML = ICON.redo + 'Ulangi'; r.onclick = retry; t.appendChild(r);
     }
     w.appendChild(t);
@@ -619,6 +633,15 @@ async function answer(){
   }
   const kind = it.kind;
   if (early && kind !== 'chat') early.ctrl.abort();
+  // Daftar template: tanya dulu (tiap item memakai kuota), lalu satu bubble + satu tugas per template.
+  if (kind !== 'chat' && (it.items || []).length > 1){
+    const n = it.items.length, label = KIND_LABEL[kind].toLowerCase();
+    cur.messages.push({id: uid(), role: 'assistant', ts: Date.now(), batch: {kind, items: it.items, state: 'ask'},
+      content: `Pesan ini berisi **${n} template**. Saya akan membuat ${n} ${label} terpisah, satu per template, paling banyak ${BATCH_MAX} sekaligus. Setiap ${label} memakai kuota akun muse.`});
+    cur.updated = Date.now(); persist();
+    busy = null; setBusy(false); render();
+    return;
+  }
   const m = kind === 'chat' && early ? draft : {role: 'assistant', content: '', ts: Date.now(), pending: true, kind: kind === 'chat' ? undefined : kind};
   if (kind !== 'chat'){
     m.prompt = it.prompt;
@@ -721,10 +744,61 @@ async function pollTask(kind, m, signal, repaint){
 }
 
 async function resumeTask(c, m){
-  const show = () => { if (cur === c) render(); };
+  const show = m.batch_of ? showItem(c, m) : () => { if (cur === c) render(); };
   try { await pollTask(m.kind, m, new AbortController().signal, show); }
   catch (e) { if (m.spec) m.note = m.spec; m.error = e.code === 401 ? KEY_MSG : (e.message || 'Gagal memeriksa tugas.'); }
-  finally { m.pending = false; persist(); show(); }
+  finally { m.pending = false; persist(); show(); if (m.batch_of) pump(c); }
+}
+
+/* ---------- Batch: satu tugas per template ---------- */
+// shortcut: batas tetap 3 per tab (akun video saat ini <= 3; antrean server menunggu maks queue_timeout). Naikkan bila akun bertambah.
+const BATCH_MAX = 3, running = new Set();
+const showItem = (c, m) => () => {
+  const row = cur === c && document.querySelector('[data-mid="' + m.id + '"]');
+  if (row) paint(row, m, c.messages.indexOf(m));
+  const head = cur === c && document.querySelector('[data-mid="' + m.batch_of + '"]');
+  if (head) paint(head, c.messages.find(x => x.id === m.batch_of), -1);
+};
+function startBatch(c, m){
+  const b = m.batch;
+  for (const it of b.items){
+    const spec = [KIND_LABEL[b.kind], it.duration && it.duration + ' dtk', it.aspect_ratio, it.resolution].filter(Boolean).join(' · ');
+    c.messages.push({id: uid(), role: 'assistant', ts: Date.now(), kind: b.kind, batch_of: m.id, pending: true,
+      content: String(it.n).padStart(2, '0') + '. ' + it.title, prompt: it.prompt, spec, note: spec + ' · antre'});
+  }
+  m.content = `Membuat **${b.items.length} ${KIND_LABEL[b.kind].toLowerCase()}**, satu per template, paling banyak ${BATCH_MAX} sekaligus. Hasilnya muncul di bawah sesuai nomor template.`;
+  b.n = b.items.length; delete b.items;  // prompt sudah ada di tiap item; jangan simpan dua kali
+  b.state = 'run'; c.updated = Date.now(); persist(); render();
+  pump(c);
+}
+function pump(c){
+  const live = c.messages.filter(x => x.batch_of && x.pending && (x.task || running.has(x))).length;
+  c.messages.filter(x => x.batch_of && x.pending && !x.task && !running.has(x)).slice(0, Math.max(0, BATCH_MAX - live)).forEach(x => runItem(c, x));
+}
+async function runItem(c, m){
+  running.add(m);
+  const show = showItem(c, m);
+  try {
+    const body = m.kind === 'image' ? {prompt: m.prompt, conversation_id: c.id, timeout: 600} : {prompt: m.prompt, conversation_id: c.id};
+    // Kunci = item + percobaan: muat ulang / tab kedua memakai tugas yang sama; "Coba lagi" membuat tugas baru.
+    const r = await (await api(m.kind === 'image' ? '/v1/images/tasks' : '/v1/videos', {method: 'POST', headers: {'Idempotency-Key': m.id + '.' + (m.tries || 0)}, body: JSON.stringify(body)})).json();
+    m.task = r.id; m.t0 = Date.now(); persist();
+    await pollTask(m.kind, m, new AbortController().signal, show);
+  } catch (e) {
+    m.note = m.spec; m.error = e.code === 401 ? KEY_MSG : (e.message || 'Gagal membuat ' + KIND_LABEL[m.kind].toLowerCase() + '.');
+  } finally {
+    m.pending = false; running.delete(m); c.updated = Date.now(); persist(); show(); pump(c);
+  }
+}
+function retryItem(c, m){
+  m.error = m.url = m.task = undefined; m.tries = (m.tries || 0) + 1;
+  m.pending = true; m.note = m.spec + ' · antre'; c.updated = Date.now(); persist();
+  showItem(c, m)(); pump(c);
+}
+function stopBatch(c, m){
+  c.messages.filter(x => x.batch_of === m.id && x.pending && !x.task && !running.has(x))
+            .forEach(x => { x.pending = false; x.note = x.spec; x.error = 'Dibatalkan.'; });
+  c.updated = Date.now(); persist(); render();
 }
 
 /* ---------- Lampiran gambar acuan ---------- */
@@ -898,10 +972,11 @@ $('scrim').onclick = closeSide;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSide(); });
 
 // Jawaban yang tertinggal "pending" (tab ditutup saat stream) ditandai, bukan dibiarkan berputar.
-chats.forEach(c => c.messages.forEach(m => { if (m.pending && m.task && m.kind){ resumeTask(c, m); return; } if (m.pending){ m.pending = false; if (!m.content && !m.url) m.error = 'Terputus sebelum selesai.'; } }));
+chats.forEach(c => c.messages.forEach(m => { if (m.pending && m.task && m.kind){ resumeTask(c, m); return; } if (m.pending && m.batch_of) return; if (m.pending){ m.pending = false; if (!m.content && !m.url) m.error = 'Terputus sebelum selesai.'; } }));
 // Pesan user tanpa jawaban (tab ditutup saat /v1/intent) -> tampilkan "Coba lagi" alih-alih diam.
 chats.forEach(c => { const l = c.messages[c.messages.length - 1]; if (l && l.role === 'user') c.messages.push({role: 'assistant', content: '', ts: Date.now(), error: 'Terputus sebelum selesai.'}); });
 setBusy(false); render(); loadModels(); pullChats(true); route();
+chats.forEach(pump);  // item batch yang belum terkirim saat tab ditutup
 if ($('adminView').hidden) $('input').focus();
 </script>
 </body>
