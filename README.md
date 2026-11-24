@@ -59,6 +59,29 @@ proxy_buffering off;         # supaya stream chat tidak tersendat
 client_max_body_size 200M;   # unggahan gambar acuan
 ```
 
+### HP Android (Termux), tanpa extension
+
+GemuseAPI bisa berjalan langsung di HP dan mengendalikan Chrome HP lewat debug nirkabel, jadi tidak perlu Chromium tambahan atau extension. Di Termux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gebang-Studio/MusangAPI/main/deploy/termux/install.sh | bash
+```
+
+Installer memandu pairing debug nirkabel (pakai layar terpisah Termux + Setelan), memasang dependensi (sekali kompilasi Rust, 10-20 menit), lalu menyalakan server di `http://127.0.0.1:18610/chat`. Setelah login muse.ai di Chrome HP, jalankan `gemuse login` untuk mengimpor sesinya. Perintah lain: `gemuse start|stop|status|update|logs|key`. Menjalankan ulang installer = update; `data/` dan `.env` tidak disentuh.
+
+Batasan di HP: setiap panggilan muse sekitar 20 detik (halaman muse berat untuk CPU HP), file buatan muse belum bisa diambil, dan Debug nirkabel kadang mati sendiri saat Wi-Fi berganti; nyalakan lagi lalu `gemuse start`.
+
+### LibreChat sebagai UI alternatif
+
+[LibreChat](https://github.com/danny-avila/LibreChat) bisa dipakai sebagai UI chat untuk GemuseAPI di komputer yang punya Docker (bukan di HP: LibreChat butuh MongoDB dan RAM sekitar 4 GB):
+
+```bash
+deploy/librechat/start.sh        # nyalakan; buka http://localhost:3080, akun pertama = admin
+deploy/librechat/start.sh stop   # matikan; percakapan tetap di deploy/librechat/data
+```
+
+Di LibreChat pilih endpoint **GemuseAPI**: `muse-spark` untuk chat, `muse-image` untuk gambar, `muse-video` untuk video. Pesan terakhir Anda menjadi prompt media (memakai kuota). `start.sh` mengisi `MUSE2API_PUBLIC_BASE` di `.env` GemuseAPI supaya browser bisa membuka gambarnya; restart GemuseAPI sekali sesudahnya. Fitur khas GemuseAPI (intent otomatis, `/gambar`, `/video`, batch template, Media library, file buatan muse) tetap hanya ada di `/chat`.
+
 ## Menambahkan akun muse
 
 1. Login ke [muse.ai](https://muse.ai/) di browser biasa.
@@ -72,7 +95,7 @@ client_max_body_size 200M;   # unggahan gambar acuan
 
 Semua endpoint kecuali `/healthz`, `/readyz`, dan `/v1/media/*` butuh header `Authorization: Bearer <MUSE2API_KEY>`.
 
-Model yang tersedia: `muse-spark` (chat), `muse-image` (gambar), dan `muse-video` (video). Nama populer seperti `gpt-4o`, `gpt-image-1`, atau `sora` otomatis dipetakan ke model yang sesuai.
+Model yang tersedia: `muse-spark` (chat), `muse-image` (gambar), dan `muse-video` (video). Nama populer seperti `gpt-4o`, `gpt-image-1`, atau `sora` otomatis dipetakan ke model yang sesuai. `muse-image` dan `muse-video` juga bisa dipanggil lewat `/v1/chat/completions` (untuk aplikasi chat yang hanya punya pemilih model): pesan user terakhir menjadi prompt dan jawabannya berupa markdown gambar/tautan video.
 
 **Chat**
 
@@ -154,3 +177,4 @@ Test browser butuh Chrome (`MUSE2API_CHROMIUM`). Panduan lengkap untuk kontribut
 
 MIT. Lihat [`LICENSE`](LICENSE).
 GemuseAPI adalah fork dari [muse2api](https://github.com/czg86389-hub/muse2api) karya czg86389-hub dan kontributornya. Bagian inti (engine CDP, pool akun, endpoint OpenAI, admin) berasal dari sana. Gebang Studio menambahkan UI chat, file buatan muse, batch template, ingatan percakapan, failover video, dan terjemahan Indonesia.
+`deploy/librechat/` menjalankan [LibreChat](https://github.com/danny-avila/LibreChat) (MIT, karya Danny Avila dan kontributornya) dari image resminya; kode LibreChat tidak disalin ke repo ini.
