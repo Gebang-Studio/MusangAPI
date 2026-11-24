@@ -1,0 +1,20 @@
+# Konfigurasi LibreChat untuk GemuseAPI. Skema: librechat.example.yaml di repo LibreChat v0.8.9.
+# Kunci dan alamat diambil dari .env (dibuat start.sh), jangan ditulis di file ini.
+version: 1.3.19
+
+cache: true
+
+endpoints:
+  custom:
+    - name: "GemuseAPI"
+      apiKey: "${GEMUSE_API_KEY}"
+      baseURL: "${GEMUSE_BASE_URL}"
+      models:
+        default: ["muse-spark"]
+        # true akan ikut menampilkan muse-image/muse-video sebagai model chat, padahal keduanya bukan model chat.
+        fetch: false
+      # Judul otomatis memakai 1 panggilan chat muse tambahan per percakapan (~20 dtk dan antre di akun yang sama).
+      titleConvo: false
+      modelDisplayLabel: "Muse"
+      # Parameter yang tidak dipakai muse; dibuang supaya permintaan tetap sederhana.
+      dropParams: ["stop", "user", "frequency_penalty", "presence_penalty"]

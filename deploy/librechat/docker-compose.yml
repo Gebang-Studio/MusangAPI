@@ -1,0 +1,35 @@
+# LibreChat (MIT, https://github.com/danny-avila/LibreChat) sebagai UI chat alternatif untuk GemuseAPI.
+# Jalankan lewat: deploy/librechat/start.sh  (membuat .env dari kunci GemuseAPI, lalu docker compose up -d)
+# Hanya untuk komputer dengan Docker (Mac/Linux/Windows). Tidak untuk HP: LibreChat butuh MongoDB dan RAM besar.
+services:
+  librechat:
+    image: registry.librechat.ai/librechat-ai/librechat:v0.8.9
+    container_name: gemuse-librechat
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+    ports:
+      - "127.0.0.1:3080:3080" # hanya dari komputer ini
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # GemuseAPI berjalan di host
+    env_file: .env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3080
+      - MONGO_URI=mongodb://mongodb:27017/LibreChat
+      - CONFIG_PATH=/app/librechat.yaml
+      - SEARCH=false
+      - ENDPOINTS=custom,agents
+      - LIBRECHAT_TEMP_CREDENTIALS_PATH=/app/data/.env.temp
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro
+      - ./data/uploads:/app/uploads
+      - ./data/images:/app/client/public/images
+      - ./data/logs:/app/logs
+  mongodb:
+    image: docker.io/library/mongo:8.0.20
+    container_name: gemuse-librechat-mongo
+    restart: unless-stopped
+    command: mongod --noauth --bind_ip_all # hanya dapat dijangkau dari jaringan internal compose
+    volumes:
+      - ./data/mongo:/data/db
