@@ -1748,7 +1748,7 @@ function __md(root){
     # Kartu file di bubble -> panel editor -> "More actions" -> Download. Muse membuat Blob dari gateway fs
     # (URL *.metaaivm.com tidak bisa di-resolve dari browser ini), hook di _DELTA_HOOK_JS menangkap Blob itu.
     # Menu Radix terbuka pada pointerdown, bukan click.
-    _GRAB_FILE_JS = r"""(async function(path, size, label){
+    _GRAB_FILE_JS = r"""(async function(path, size, label, alt){
       var sleep = function(ms){ return new Promise(function(r){ setTimeout(r, ms); }); };
       var until = async function(fn, ms){ var end = Date.now() + ms; while (Date.now() < end){ var v = fn(); if (v) return v; await sleep(100); } return null; };
       var press = function(el){ var r = el.getBoundingClientRect(), o = {bubbles:true, cancelable:true, button:0, buttons:1, pointerType:'mouse', clientX:r.x + r.width/2, clientY:r.y + r.height/2};
@@ -1763,7 +1763,7 @@ function __md(root){
         press(card);
         var more = await until(function(){ return q('hatch-file-editor-more-actions'); }, 8000);
         if (!more) return JSON.stringify({ok:false, err:'no-editor'});
-        var mine = function(){ return (window.__museDl || []).slice(n0).find(function(d){ return d.name === label; }); };
+        var mine = function(){ return (window.__museDl || []).slice(n0).find(function(d){ return d.name === label || d.name === alt; }); };
         var hit = null, step = '';
         // Percobaan kedua: item Download bisa belum aktif saat isi file masih dimuat dari gateway.
         for (var attempt = 0; attempt < 2 && !hit; attempt++){
@@ -1785,19 +1785,22 @@ function __md(root){
         window.__museGrab = false;
         var c = q('hatch-file-editor-close'); if (c) press(c);
       }
-    })(%s, %s, %s)"""
+    })(%s, %s, %s, %s)"""
 
     def _chat_file_link(self, f: dict) -> str:
         """Ambil satu file buatan muse dan kembalikan tautan markdown; gagal -> kalimat yang jelas, bukan diam."""
-        label = f.get("label") or os.path.basename(f["path"]) or "file"
         path = re.sub(r"^sandbox://", "", f["path"])
+        # label = nama tampilan ("Sholawat Penyejuk Hati txt"); muse mengunduh dengan nama file di path
+        # ("Sholawat-Penyejuk-Hati.txt"), yang juga membawa ekstensinya.
+        label = os.path.basename(path) or f.get("label") or "file"
         size = int(f.get("byte_len") or 0)
         try:
             if not self.file_sink:
                 raise MuseGenerationError("file_sink belum dipasang")
             if size > self.CHAT_FILE_MAX:
                 raise MuseGenerationError(f"{size} byte, melebihi batas {self.CHAT_FILE_MAX}")
-            raw = self.page.js(self._GRAB_FILE_JS % (json.dumps(path), size, json.dumps(label)), await_promise=True, timeout=120)
+            raw = self.page.js(self._GRAB_FILE_JS % (json.dumps(path), size, json.dumps(label), json.dumps(f.get("label") or "")),
+                               await_promise=True, timeout=120)
             # Bukan string = evaluate tidak mengembalikan nilai (mis. exceptionDetails): simpan apa adanya untuk diagnosis.
             info = json.loads(raw) if isinstance(raw, str) else {"ok": False, "err": "cdp " + json.dumps(raw, ensure_ascii=False, default=str)[:300]}
             if not info.get("ok"):
@@ -1971,7 +1974,7 @@ function __md(root){
           dialog:!!m.closest('[role=dialog],[aria-modal=true]')};
       });
       return JSON.stringify(best);
-    })(%s, %s, %s)"""
+    })(%s, %s, %s, %s)"""
     _CLOSE_VIEWER_JS = (
         "(function(){var t=document.activeElement||document.body;"
         "['keydown','keyup'].forEach(function(k){t.dispatchEvent(new KeyboardEvent(k,"

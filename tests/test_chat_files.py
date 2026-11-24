@@ -55,7 +55,22 @@ out, page = run({"ok": True, "mime": "text/plain", "b64": "c2F0dQpkdWEKdGlnYQo="
                 lambda label, mime, data: saved.append((label, mime, data)) or "/v1/files/" + "a" * 32 + ".txt?name=uji-satu.txt")
 assert out == "Selesai, ini filenya:\n\n\n\n[uji-satu.txt](/v1/files/" + "a" * 32 + ".txt?name=uji-satu.txt)", out
 assert saved == [("uji-satu.txt", "text/plain", b"satu\ndua\ntiga\n")], saved
-assert '"workspace/your_files/uji-satu.txt", 14, "uji-satu.txt"' in page.calls[0], "path tanpa sandbox:// + ukuran + nama unduhan"
+assert '"workspace/your_files/uji-satu.txt", 14, "uji-satu.txt", "uji-satu.txt"' in page.calls[0], "path tanpa sandbox:// + ukuran + nama unduhan"
+
+# 2a. label tampilan muse beda dari nama file (kasus nyata: "Sholawat Penyejuk Hati txt" vs Sholawat-Penyejuk-Hati.txt)
+PRETTY = [dict(e, payload=dict(e["payload"], data={"file": dict(e["payload"]["data"]["file"], label="Uji Satu txt")}))
+          if e["event"] == "delta.presentation" else e for e in EVENTS]
+saved2 = []
+e3 = object.__new__(eng.MuseEngine)
+e3._take_events = lambda: []
+e3._local = __import__("threading").local()
+e3._local.page = FakePage({"ok": True, "mime": "text/plain", "b64": "c2F0dQpkdWEKdGlnYQo="})
+e3.file_sink = lambda label, mime, data: saved2.append(label) or "/v1/files/" + "c" * 32 + ".txt?name=uji-satu.txt"
+n3 = eng._NetReply()
+n3.feed(PRETTY)
+out3 = "".join(e3._net_reply(n3, 10 ** 12, None))
+assert saved2 == ["uji-satu.txt"] and "[uji-satu.txt](" in out3, (saved2, out3)
+assert '"uji-satu.txt", "Uji Satu txt"' in e3._local.page.calls[0], "nama file dari path, label tampilan sebagai cadangan"
 out, _ = run({"ok": False, "err": "no-card"}, lambda *a: "x")
 assert "uji-satu.txt dibuat muse tetapi tidak bisa diambil: no-card" in out, out
 
