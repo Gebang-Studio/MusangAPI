@@ -2949,7 +2949,7 @@ def get_keepalive_status(_=Depends(auth)):
 
 
 # ------------------------- 仓库实时更新检测、通知与一键在线升级 -------------------------
-REPO_SLUG = os.environ.get("MUSE2API_REPOSITORY", "czg86389-hub/muse2api")
+REPO_SLUG = os.environ.get("MUSE2API_REPOSITORY", "Gebang-Studio/MusangAPI")
 if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", REPO_SLUG):
     raise ValueError("Invalid MUSE2API_REPOSITORY")
 REPO_REF = os.environ.get("MUSE2API_REPO_REF", "main")
@@ -3012,7 +3012,7 @@ def _git(args: list[str], timeout: int = 30):
 
 
 def _ensure_git_repo(token: str = ""):
-    """确保 BASE_DIR 已初始化为绑定 czg86389-hub/muse2api 的 Git 仓库。"""
+    """确保 BASE_DIR 已初始化为绑定 REPO_SLUG（默认 Gebang-Studio/MusangAPI）的 Git 仓库。"""
     git_dir = os.path.join(BASE_DIR, ".git")
     remote_url = f"https://x-access-token:{token}@github.com/{REPO_SLUG}.git" if token else f"{REPO_URL}.git"
     if not os.path.isdir(git_dir):
@@ -3020,8 +3020,8 @@ def _ensure_git_repo(token: str = ""):
         _git(["remote", "add", "origin", remote_url])
     else:
         _git(["remote", "set-url", "origin", remote_url])
-    _git(["config", "user.name", "czg86389-hub"])
-    _git(["config", "user.email", "czg86389-hub@users.noreply.github.com"])
+    _git(["config", "user.name", "Gebang-Studio"])
+    _git(["config", "user.email", "Gebang-Studio@users.noreply.github.com"])
 
 
 def _check_update_sync(force: bool = False, _auto_upgrade: bool = False) -> dict:
