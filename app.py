@@ -1990,10 +1990,10 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
                     client_gone.set()
 
             def pump():
+                # Jangan berhenti saat client_gone: safe_chat_stream juga men-set-nya ketika selesai normal,
+                # dan finish/[DONE] masih harus terkirim. Klien yang pergi sudah menghentikan muse lewat event itu.
                 try:
                     for chunk in sync_stream():
-                        if client_gone.is_set():
-                            break
                         put(chunk)
                 finally:
                     put(None)
