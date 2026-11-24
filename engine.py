@@ -328,6 +328,11 @@ def _stream_safe(text: str) -> str:
 
 # Balasan muse datang lewat WebSocket terenkripsi (Noise), jadi CDP Network hanya melihat ciphertext.
 # Setelah didekripsi, halaman mem-parse event ndjson dengan JSON.parse: di sinilah markdown mentah bisa dibaca.
+# Chrome Android di latar belakang tidak me-render, jadi requestAnimationFrame tidak pernah jalan
+# dan hydration React muse macet di "server". Diganti setTimeout hanya untuk Chrome Android.
+_ANDROID_RAF_JS = ("window.requestAnimationFrame=function(cb){return setTimeout(function(){cb(performance.now())},16)};"
+                   "window.cancelAnimationFrame=function(id){clearTimeout(id)};")
+
 _DELTA_HOOK_JS = """(function(){
   if (window.__museEvt) return; window.__museEvt = [];
   var jp = JSON.parse;
@@ -393,6 +398,7 @@ class MuseEngine:
         self.cfg = cfg
         self.proc: subprocess.Popen | None = None
         self.browser: CDP | None = None
+        self.android = False  # True kalau CDP yang dipakai ulang adalah Chrome Android (adb forward)
         self._local = threading.local()
         self._start_lock = threading.Lock()
         self._active_contexts: set[str] = set()
@@ -464,6 +470,7 @@ class MuseEngine:
                     v = http_json(self._debug_url(), timeout=1)
                     if v and "webSocketDebuggerUrl" in v:
                         self.browser = CDP(v["webSocketDebuggerUrl"], timeout=180)
+                        self.android = "Android-Package" in v
                         return
                 except Exception:
                     pass
@@ -621,6 +628,8 @@ class MuseEngine:
             page.send("Page.enable")
             page.send("Runtime.enable")
             page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _DELTA_HOOK_JS})
+            if self.android:
+                page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _ANDROID_RAF_JS})
             page.send("Browser.setDownloadBehavior", {
                 "behavior": "allow", "downloadPath": self._new_download_dir(),
                 "browserContextId": ctx_id,

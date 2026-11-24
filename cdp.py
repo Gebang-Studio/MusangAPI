@@ -16,7 +16,8 @@ class CDPError(RuntimeError):
 
 class CDP:
     def __init__(self, ws_url: str, timeout: float = 90.0, max_size: int = 256 << 20):
-        self.ws = websocket.create_connection(ws_url, timeout=timeout, max_size=max_size)
+        # Tanpa header Origin: Chrome Android (adb forward) menolak Origin dan tidak bisa diberi --remote-allow-origins.
+        self.ws = websocket.create_connection(ws_url, timeout=timeout, max_size=max_size, suppress_origin=True)
         self.timeout = timeout
         self._id = 0
         self._lock = threading.Lock()
