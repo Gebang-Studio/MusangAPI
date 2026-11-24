@@ -354,7 +354,7 @@ def main() -> int:
         say("✗ 缺少参数。请这样运行：")
         say("    python get_muse_cookie.py --base https://你的域名 --key m2a_xxx")
         say()
-        say("  （这两个值可以在 muse2api 管理页面的「接入信息」里复制）")
+        say("  （这两个值可以在 GemuseAPI 管理页面的「接入信息」里复制）")
         return 2
     if not args.label:
         args.label = "muse-" + time.strftime("%m%d-%H%M")

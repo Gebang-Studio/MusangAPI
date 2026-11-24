@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>muse2api · Chat</title>
+<title>GemuseAPI · Chat</title>
 <link rel="stylesheet" href="theme.css">
 <style>
   /* ds-allow-hardcode:start: halaman mandiri tanpa sistem token (sama seperti admin.html); angka hasil ukur muse.ai */
@@ -822,7 +822,7 @@ function route(){
   admin ? $('railChat').removeAttribute('aria-current') : $('railChat').setAttribute('aria-current', 'page');
   document.querySelectorAll('.rail a[data-sec]').forEach(a => a.dataset.sec === lastAdmin && admin ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'));
   $('adminTitle').textContent = 'Admin · ' + LABELS[lastAdmin];
-  document.title = admin ? 'muse2api · Admin' : 'muse2api · Chat';
+  document.title = admin ? 'GemuseAPI · Admin' : 'GemuseAPI · Chat';
 }
 function ensureFrame(){
   if (frame) return;

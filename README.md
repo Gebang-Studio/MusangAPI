@@ -1,4 +1,6 @@
-# MUSE2API
+# GemuseAPI
+
+> by **Gebang Studio** · fork dari [muse2api](https://github.com/czg86389-hub/muse2api)
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue?logo=python" alt="Python Version" />
