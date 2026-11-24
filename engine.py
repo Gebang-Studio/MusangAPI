@@ -493,6 +493,17 @@ class MuseEngine:
                     time.sleep(1)
             raise MuseGenerationError(f"Chromium 启动失败: {last}")
 
+    def browser_alive(self) -> bool:
+        """Chrome yang dijalankan sendiri masih hidup, atau Chrome yang dipakai ulang (tanpa proc) masih menjawab CDP."""
+        if self.proc:
+            return self.proc.poll() is None
+        if not self.browser:
+            return False
+        try:
+            return "webSocketDebuggerUrl" in (http_json(self._debug_url(), timeout=1) or {})
+        except Exception:
+            return False
+
     def stop(self):
         with self._start_lock:
             self._close_page()

@@ -1411,7 +1411,7 @@ def readyz():
     accs = [a for a in store.list_accounts() if a.get("enabled", True)]
     return {"status": "ready" if accs else "no_account",
             "accounts": len(accs),
-            "browser_running": bool(engine.proc and engine.proc.poll() is None)}
+            "browser_running": engine.browser_alive()}
 
 
 @app.get("/v1/models")
@@ -2194,7 +2194,7 @@ def admin_status(_=Depends(auth)):
         "tasks": store.list_tasks(20),
         "media_count": len(os.listdir(CFG.media_dir))
         if os.path.isdir(CFG.media_dir) else 0,
-        "browser_running": bool(engine.proc and engine.proc.poll() is None),
+        "browser_running": engine.browser_alive(),
         "essential_cookies": list(ESSENTIAL_COOKIES),
         "base_url": f"{base}/v1" if base else "",
         "config": {"site": CFG.site_url, "cdp_port": CFG.cdp_port,
