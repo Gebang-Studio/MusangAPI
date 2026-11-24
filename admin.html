@@ -352,6 +352,12 @@
   }
   input[type=checkbox]{width:24px;height:24px}
   /* ds-allow-hardcode:end */
+  /* Watermark merek di pojok kanan atas. ds-allow-hardcode:start (ukuran tipografi merek; tema tidak punya token ukuran font) */
+  .brand{margin-left:auto;font-size:22px;font-weight:800;letter-spacing:.3px;color:var(--text);text-decoration:none;white-space:nowrap}
+  .brand:hover{text-decoration:underline}
+  html.embed .brand{order:1}
+  html.embed .pills{order:2}
+  /* ds-allow-hardcode:end */
 </style>
 </head>
 <body>
@@ -383,6 +389,7 @@
         <option value="en">English</option>
       </select>
     </div>
+    <a class="brand" href="https://gebangstudio.web.id" target="_blank" rel="noopener">Gebang Studio</a>
   </div>
 </header>
 
