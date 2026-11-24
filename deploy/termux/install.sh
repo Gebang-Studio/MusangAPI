@@ -13,6 +13,9 @@ die() { printf '\n\033[1;31mGAGAL:\033[0m %s\n' "$*" >&2; exit 1; }
 
 if [ -z "${PREFIX:-}" ] || ! command -v pkg >/dev/null; then die "Script ini khusus aplikasi Termux di Android."; fi
 
+# Kompilasi bisa 20+ menit; tanpa wake-lock Android menidurkan Termux saat layar mati.
+termux-wake-lock 2>/dev/null || true
+
 say "1/5 Memasang paket Termux (python, git, adb)…"
 # </dev/null: saat dijalankan lewat `curl | bash`, stdin adalah script ini sendiri; apt tidak boleh memakannya.
 DPKG=(-y -o Dpkg::Options::=--force-confnew)

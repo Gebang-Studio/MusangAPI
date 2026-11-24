@@ -72,7 +72,8 @@ ensure_chrome() {
   # Socket DevTools hanya dibuat kalau Chrome dibuka SETELAH debugging aktif.
   say "Membuka ulang Chrome supaya DevTools aktif (tab Anda dipulihkan otomatis)…"
   adb -s "$s" shell am force-stop $CHROME
-  adb -s "$s" shell am start -n $CHROME/com.google.android.apps.chrome.Main -d about:blank >/dev/null 2>&1
+  # Lewat launcher, bukan nama activity: nama activity Chrome berubah antarversi (Chrome 157 tidak punya .Main).
+  adb -s "$s" shell monkey -p $CHROME -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
   for _ in $(seq 1 20); do cdp_ok && break; sleep 1; done
   adb -s "$s" shell am start -n com.termux/.app.TermuxActivity >/dev/null 2>&1
   cdp_ok
