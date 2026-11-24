@@ -60,7 +60,6 @@ Isi `data/`: `accounts.json` (cookie, rahasia), `tasks.json`, `chats.json` (riwa
 
 ## Masalah terbuka (per 2026-11-24)
 
-- **Docker rusak**: `app.py` mengimpor `intent` dan `memory`, tapi `intent.py` dan `memory.py` tidak ada di `COPY` Dockerfile maupun di `TRACKED_REPO_PATHS`.
 - **Kata pertama lebih lambat sekitar 3 detik, dan 2/20 intent lewat 60 detik**, sejak fitur file (`0aafcd4`). Dugaan yang belum terbukti: penahanan di `engine._net_reply` setelah `message_done` (0,3 detik, plus sampai 180 detik selama task muse masih `running`) juga terkena `_ask_muse`. Langkah selanjutnya: catat lama penahanan di log, lalu kalau terbukti, lewati penahanan itu untuk intent.
 - File besar (6 MB) dari muse gagal dengan respons CDP kosong `{}`. Penyebabnya belum diketahui, dan bukan batas ukuran CDP.
 - Belum ada satu thread muse per percakapan. Riwayat masih ditempel sebagai transkrip 用户/助手 dan dipotong dari yang tertua kalau lebih dari 30 ribu karakter.
