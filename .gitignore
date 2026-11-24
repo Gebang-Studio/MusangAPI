@@ -65,3 +65,10 @@ Thumbs.db
 
 # Independent generation queue settings
 data/generation-queue.json
+
+# Data pribadi lokal (riwayat chat, ingatan, blokir video) dan bukti gate UI
+data/chats.json
+data/chats.json.corrupt-*
+data/conversations.json
+data/video-blocked.json
+.ds-receipts/
