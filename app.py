@@ -476,11 +476,14 @@ def _renew_and_persist(acc_id: str, wake_vm: bool = True, force: bool = False) -
 
 
 def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
-                     timeout: int, account_id: str | None, images: list[str] | None = None):
-    """Acquire a generation slot before the account lease; release both after cleanup."""
+                     timeout: int, account_id: str | None, images: list[str] | None = None,
+                     stop_event: threading.Event | None = None):
+    """Acquire a generation slot before the account lease; release both after cleanup.
+
+    stop_event dari pemanggil: di-set saat klien memutus stream, supaya muse berhenti walau belum ada kata."""
     import queue
     q = queue.Queue(maxsize=100)
-    stop_event = threading.Event()
+    stop_event = stop_event or threading.Event()
 
     def worker():
         cur_id = account_id
@@ -1905,12 +1908,15 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
         return [head, body]
 
     if req.stream:
+        client_gone = threading.Event()
+
         def sync_stream():
             try:
                 # 握手建立瞬间立即发送 role: assistant 首包，让下游客户端秒级捕获光标
                 yield _sse(_chat_chunk(cid, created, model, {"role": "assistant"}))
 
-                stream_gen = safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images)
+                stream_gen = safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images,
+                                              stop_event=client_gone)
                 if not tool_note:
                     for chunk in stream_gen:
                         for piece in _pace_text(chunk):
@@ -1969,7 +1975,36 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
                 yield _sse({"error": {"message": str(exc), "type": "server_error", "code": 502}})
             except Exception as exc:
                 yield _sse({"error": {"message": f"内部错误: {exc}", "type": "server_error", "code": 500}})
-        return StreamingResponse(sync_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+        async def guarded():
+            # Klien putus (Hentikan) harus langsung menghentikan muse dan melepas akun. Generator sinkron menunggu
+            # kata pertama di thread; iterate_in_threadpool baru bisa dibatalkan setelah thread itu kembali, jadi
+            # thread ini mengisi asyncio.Queue yang penantiannya bisa dibatalkan seketika.
+            loop = asyncio.get_running_loop()
+            chunks: asyncio.Queue = asyncio.Queue()
+
+            def put(item):
+                try:
+                    loop.call_soon_threadsafe(chunks.put_nowait, item)
+                except RuntimeError:  # loop sudah ditutup: klien sudah pergi
+                    client_gone.set()
+
+            def pump():
+                try:
+                    for chunk in sync_stream():
+                        if client_gone.is_set():
+                            break
+                        put(chunk)
+                finally:
+                    put(None)
+
+            threading.Thread(target=pump, daemon=True).start()
+            try:
+                while (chunk := await chunks.get()) is not None:
+                    yield chunk
+            finally:
+                client_gone.set()
+        return StreamingResponse(guarded(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
     def run() -> str:
         return "".join(safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images))
