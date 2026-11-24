@@ -147,27 +147,31 @@
   .empty{text-align:center;color:var(--muted);padding:34px 10px;font-size:13px}
 
   /* ---------- 媒体库 ---------- */
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
-  .tile{position:relative;background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;transition:.18s}
-  .tile:hover{border-color:#37415a;transform:translateY(-2px)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+  .tile{position:relative;display:flex;flex-direction:column;background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;transition:border-color .15s}
+  .tile:hover{border-color:#37415a}
   .tile.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-  .tile .check-tag{position:absolute;top:8px;left:8px;z-index:3;display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:rgba(15,23,42,.82);backdrop-filter:blur(4px);border:1px solid var(--line);cursor:pointer;transition:.15s}
+  .tile .check-tag{position:absolute;top:8px;left:8px;z-index:3;display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:rgba(0,0,0,.6);border:1px solid var(--line);cursor:pointer;transition:.15s}
   .tile .check-tag:hover{border-color:var(--accent);background:rgba(15,23,42,.95)}
   .tile .check-tag input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--accent)}
-  .tile .thumb{height:150px;background:#060911;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}
-  .tile .thumb img,.tile .thumb video{width:100%;height:100%;object-fit:contain;display:block}
+  .tile .thumb{aspect-ratio:16/9;background:#060911;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}
+  .tile .thumb img,.tile .thumb video{width:100%;height:100%;object-fit:cover;display:block}
+  .tile a.thumb{text-decoration:none}
   .tile button.thumb{width:100%;padding:0;border:0;border-radius:0;cursor:pointer;color:#fff}
   .tile .thumb img[hidden]{display:none}
-  .tile .play-icon{position:absolute;display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.65);font-size:21px;pointer-events:none}
+  .tile .play-icon{position:absolute;display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.6);font-size:15px;pointer-events:none}
   .tile button.thumb:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
   dialog.media-dialog{width:min(960px,calc(100% - 32px));max-height:calc(100dvh - 32px);padding:16px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg2);color:var(--text)}
   dialog.media-dialog::backdrop{background:rgba(0,0,0,.75)}
   .media-dialog header{display:flex;align-items:center;gap:16px;margin-bottom:12px}
   .media-dialog h2{margin:0;flex:1;min-width:0;font-size:15px;overflow-wrap:anywhere}
   .media-dialog video{display:block;width:100%;max-height:75dvh;background:#000}
-  .tile .meta{padding:9px 11px;font-size:11.5px;color:var(--muted)}
-  .tile .meta .nm{font-family:ui-monospace,monospace;color:var(--text);font-size:11px;word-break:break-all}
-  .tile .meta .ac{display:flex;gap:6px;margin-top:7px;align-items:center}
+  .tile .meta{display:flex;flex-direction:column;flex:1;gap:4px;padding:10px 12px 12px;font-size:12px;color:var(--muted);min-width:0}
+  .tile .meta .nm{color:var(--text);font-size:13px;line-height:18px;min-height:36px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+  .tile .meta .nm.file{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)}
+  .tile .meta .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tile .meta .ac{display:flex;gap:8px;margin-top:auto;padding-top:6px;align-items:center}
+  .tile .meta .ac .del{margin-left:auto}
 
   /* ---------- 结果预览 ---------- */
   .result{margin-top:14px;padding:14px;background:var(--bg2);border:1px dashed var(--line);border-radius:var(--radius);display:none}
@@ -281,7 +285,7 @@
   @media (max-width:999px){#tab-pool tr>:nth-child(8):not([colspan]){display:none}}
   .stats{display:flex;flex-wrap:wrap}
   .stats .stat{flex:1 1 120px}
-  .grid{grid-template-columns:repeat(auto-fill,minmax(min(190px,100%),1fr))}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(min(220px,100%),1fr))}
   .btnlike{display:inline-flex;align-items:center;justify-content:center}
   button,.btnlike,a.pill,select,input[type=text],input[type=number],input[type=password]{min-height:32px}
   @media (max-width:768px){
@@ -339,7 +343,7 @@
     html.embed .keybox input{width:80px}
   }
   .tile .meta .ac>*,#taskBody a{display:inline-flex;align-items:center;min-height:32px}
-  .tile .meta .ac>*{padding:0 12px}
+  .tile .meta .ac>*{padding:0 12px;font-size:12px}
   .tile .check-tag{min-width:32px;min-height:32px}
   @media (max-width:768px){
     pre.code{padding-top:60px}
@@ -714,6 +718,7 @@
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="ghost mini" onclick="loadMedia()">刷新</button>
           <button class="ghost mini" id="btnSelectAllMedia" onclick="toggleSelectAllMedia()">全选</button>
+          <button class="ghost mini" id="btnDownSelectedMedia" onclick="downloadSelectedMedia()" style="display:none"><span id="downMediaLabel">下载选中</span>&nbsp;(<span id="selMediaCountDown">0</span>)</button>
           <button class="danger mini" id="btnDelSelectedMedia" onclick="delSelectedMedia()" style="display:none">删除选中 (<span id="selMediaCount">0</span>)</button>
         </div>
       </div>
@@ -1136,6 +1141,9 @@ const I18N_EN = {
   "所有已生成并落盘的图片 / 视频，可直接下载或把链接给下游项目使用。": "All generated images / videos saved on disk. Download them directly or give the links to downstream projects.",
   "全选": "Select all",
   "删除选中 (": "Delete selected (",
+  "下载选中": "Download selected",
+  "打包中…": "Preparing ZIP…",
+  "下载失败：": "Download failed: ",
   "在线生图测试": "Image generation test",
   "真实调用 muse.ai 生成，图片约 10–30 秒返回。": "Calls muse.ai for real; images return in about 10–30 seconds.",
   "比例": "Aspect ratio",
@@ -2237,6 +2245,8 @@ function updateMediaSelectionUI(){
   if (btnDel) {
     btnDel.style.display = count > 0 ? 'inline-flex' : 'none';
   }
+  $('selMediaCountDown').textContent = count;
+  $('btnDownSelectedMedia').style.display = count > 0 ? 'inline-flex' : 'none';
   if (btnSelAll) {
     btnSelAll.textContent = (total > 0 && count === total) ? '取消全选' : '全选';
   }
@@ -2314,6 +2324,40 @@ async function delSelectedMedia(){
   }
 }
 
+// Nama unduhan = judul prompt + 8 huruf hash, sama dengan isi ZIP dari /admin/media/zip.
+function mediaFileName(m){
+  const t = (m.prompt || '').replace(/[*#]+/g, '').trim().split('\n')[0]
+    .replace(/[\\/:*?"<>|\x00-\x1f\s]+/g, ' ').trim().slice(0, 80).replace(/[ .]+$/, '');
+  const ext = (m.name.match(/\.[^.]+$/) || [''])[0];
+  return t ? `${t}-${m.name.slice(0, m.name.length - ext.length).slice(0, 8)}${ext}` : m.name;
+}
+
+// 1 file: unduh langsung. Lebih dari 1: satu ZIP dari server (browser memblokir banyak unduhan beruntun).
+async function downloadSelectedMedia(){
+  const names = Array.from(_selectedMedia);
+  if (!names.length) return;
+  const save = (href, name) => { const a = document.createElement('a'); a.href = href; a.download = name || ''; document.body.appendChild(a); a.click(); a.remove(); };
+  if (names.length === 1){
+    const m = _allMedia.find(x => x.name === names[0]);
+    if (m) save(m.url, mediaFileName(m));
+    return;
+  }
+  const btn = $('btnDownSelectedMedia'), label = $('downMediaLabel');
+  btn.disabled = true; label.textContent = '打包中…';
+  try{
+    const r = await fetch('/admin/media/zip', {method: 'POST', body: JSON.stringify({names}),
+      headers: Object.assign({'Content-Type': 'application/json'}, KEY ? {Authorization: 'Bearer ' + KEY} : {})});
+    if (!r.ok){ let d = null; try { d = await r.json(); } catch(e){} throw new Error((d && d.detail) || 'HTTP ' + r.status); }
+    const url = URL.createObjectURL(await r.blob());
+    save(url, `muse2api-media-${names.length}.zip`);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }catch(e){
+    toast('下载失败：' + e.message, 'bad');
+  }finally{
+    btn.disabled = false; label.textContent = '下载选中';
+  }
+}
+
 async function loadMedia(){
   closeMediaPreview();
   try{
@@ -2333,6 +2377,11 @@ async function loadMedia(){
     }
     $('mediaGrid').innerHTML = ms.map(m => {
       const isSel = _selectedMedia.has(m.name);
+      // Judul = prompt pembuatnya; file tanpa tugas (unggahan, tugas terhapus) memakai nama file.
+      // Baris pertama = judul template ("Pantura Pekalongan, …"); prompt lengkap ada di tooltip. Markdown mentah (**, ##) dibuang.
+      const full = (m.prompt || '').replace(/[*#]+/g, '').trim();
+      const title = (full.split('\n').find(l => l.trim()) || '').trim();
+      const when = new Date(m.mtime * 1000).toLocaleString(undefined, {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
       return `
       <div class="tile ${isSel ? 'selected' : ''}" data-name="${esc(m.name)}">
         <label class="check-tag" title="勾选以批量操作" onclick="event.stopPropagation()">
@@ -2343,14 +2392,13 @@ async function loadMedia(){
               ${m.thumbnail_url ? `<img src="${esc(m.thumbnail_url)}" loading="lazy" decoding="async" alt="" onerror="this.hidden=true">` : ''}
               <span class="play-icon" aria-hidden="true">▶</span>
             </button>`
-          : `<div class="thumb"><img src="${esc(m.url)}" loading="lazy" alt=""></div>`}
+          : `<a class="thumb" href="${esc(m.url)}" target="_blank" rel="noopener"><img src="${esc(m.url)}" loading="lazy" alt="${esc(title || m.name)}"></a>`}
         <div class="meta">
-          <div class="nm" title="${esc(m.name)}">${esc(m.name)}</div>
-          <div style="margin-top:3px">${fmtBytes(m.bytes)} · ${fmtTime(m.mtime)}</div>
+          <div class="nm${title ? '' : ' file'}" title="${esc(full ? full.slice(0, 600) + '\n\n' + m.name : m.name)}">${esc(title || m.name)}</div>
+          <div class="sub"><span>${m.kind === 'video' ? '视频' : '图片'}</span> · ${fmtBytes(m.bytes)} · ${esc(when)}</div>
           <div class="ac">
-            <a class="badge info" href="${esc(m.url)}" target="_blank" ${m.kind === 'video' ? 'data-play-video' : ''}>打开</a>
-            <a class="badge mute" href="${esc(m.url)}" download>下载</a>
-            <a class="badge bad" href="javascript:void(0)" onclick="delSingleMedia('${esc(m.name)}')">删除</a>
+            <a class="btnlike ghostlike mini" href="${esc(m.url)}" download="${esc(mediaFileName(m))}">下载</a>
+            <button type="button" class="danger mini del" onclick="delSingleMedia('${esc(m.name)}')">删除</button>
           </div>
         </div>
       </div>`;

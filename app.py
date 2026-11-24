@@ -2597,19 +2597,45 @@ def clear_tasks(payload: dict = Body(default={}), _=Depends(auth)):
     return {"removed": store.clear_tasks(int(payload.get("keep") or 0))}
 
 
+def _video_of_frame(name: str, names: set) -> str | None:
+    """'x_last.png' -> 'x.mp4' bila video itu ada (frame terakhir yang disimpan untuk permintaan lanjutan)."""
+    stem, ext = os.path.splitext(name)
+    if ext.lower() != ".png" or not stem.endswith("_last"):
+        return None
+    return next((stem[:-5] + v for v in VIDEO_FORMATS if stem[:-5] + v in names), None)
+
+
+def _media_prompts() -> dict:
+    """nama file -> prompt tugas pembuatnya: judul yang bisa dibaca manusia, nama file hanya hash."""
+    return {(t.get("result") or {}).get("filename"): t.get("prompt")
+            for t in list(store.tasks.values()) if isinstance(t.get("result"), dict)}
+
+
+def _remove_media(name: str):
+    """Hapus file media + thumbnail-nya; video ikut membawa frame terakhirnya (tidak tampil di media library)."""
+    os.remove(os.path.join(CFG.media_dir, name))
+    _clear_media_thumbnail(name)
+    if os.path.splitext(name)[1].lower() in VIDEO_FORMATS:
+        frame = os.path.join(CFG.media_dir, os.path.splitext(name)[0] + "_last.png")
+        if os.path.isfile(frame):
+            os.remove(frame)
+
+
 @app.get("/admin/media")
 def admin_media(_=Depends(auth)):
     d = CFG.media_dir
     items = []
-    if os.path.isdir(d):
-        for name in os.listdir(d):
+    prompts = _media_prompts()
+    names = set(os.listdir(d)) if os.path.isdir(d) else set()
+    if names:
+        for name in names:
             p = os.path.join(d, name)
-            if not os.path.isfile(p):
-                continue
+            if not os.path.isfile(p) or _video_of_frame(name, names):
+                continue  # frame terakhir video (acuan "lanjutkan") ikut videonya, bukan kartu sendiri
             ext = os.path.splitext(name)[1].lower()
             stat = os.stat(p)
             is_video = ext in VIDEO_FORMATS
-            item = {"name": name, "url": media_url(name), "bytes": stat.st_size,
+            item = {"name": name, "url": media_url(name), "bytes": stat.st_size, "prompt": prompts.get(name),
                     "mtime": int(stat.st_mtime), "kind": "video" if is_video else "image"}
             if is_video:
                 from urllib.parse import quote
@@ -2636,12 +2662,42 @@ def delete_media(payload: dict = Body(default={}), _=Depends(auth)):
         p = os.path.join(d, name)
         if os.path.isfile(p):
             try:
-                os.remove(p)
-                _clear_media_thumbnail(name)
+                _remove_media(name)
                 removed += 1
             except OSError as e:
                 errors.append(f"{name}: {str(e)}")
     return {"removed": removed, "errors": errors}
+
+
+@app.post("/admin/media/zip")
+def zip_media(payload: dict = Body(default={}), _=Depends(auth)):
+    """Unduh media terpilih sebagai satu ZIP; nama di dalam = judul prompt + 8 huruf hash (tetap unik)."""
+    names = payload.get("names")
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names):
+        raise HTTPException(400, "names 必须是非空文件名数组")
+    if any("/" in n or "\\" in n or ".." in n for n in names):
+        raise HTTPException(400, "非法文件名")
+    paths = [(n, os.path.join(CFG.media_dir, n)) for n in dict.fromkeys(names)]
+    paths = [(n, p) for n, p in paths if os.path.isfile(p)]
+    if not paths:
+        raise HTTPException(404, "文件不存在")
+    import tempfile
+    from starlette.background import BackgroundTask
+    prompts = _media_prompts()
+    fd, tmp = tempfile.mkstemp(prefix="muse2api-media-", suffix=".zip")
+    try:
+        # ZIP_STORED: mp4/png/webp sudah terkompresi; file sementara (bukan memori) karena batch bisa ratusan MB.
+        with os.fdopen(fd, "wb") as f, zipfile.ZipFile(f, "w", zipfile.ZIP_STORED) as z:
+            for n, p in paths:
+                stem, ext = os.path.splitext(n)
+                title = re.sub(r"[*#]+", "", prompts.get(n) or "").strip().split("\n")[0]
+                title = re.sub(r'[\\/:*?"<>|\x00-\x1f\s]+', " ", title).strip()[:80].rstrip(" .")
+                z.write(p, f"{title}-{stem[:8]}{ext}" if title else n)
+    except Exception:
+        os.unlink(tmp)
+        raise
+    return FileResponse(tmp, media_type="application/zip", filename=f"muse2api-media-{len(paths)}.zip",
+                        headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, tmp))
 
 
 @app.delete("/admin/media/{name}")
@@ -2652,8 +2708,7 @@ def delete_single_media(name: str, _=Depends(auth)):
     if not os.path.isfile(p):
         raise HTTPException(404, "文件不存在")
     try:
-        os.remove(p)
-        _clear_media_thumbnail(name)
+        _remove_media(name)
         return {"status": "ok", "deleted": name}
     except OSError as e:
         raise HTTPException(500, f"删除失败: {e}")
