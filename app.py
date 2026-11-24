@@ -29,7 +29,6 @@ import asyncio
 import copy
 from contextlib import contextmanager
 import base64
-import mimetypes
 import collections
 import binascii
 import io
@@ -1873,24 +1872,17 @@ _SSE_HEADERS = {
 _CHAT_MEDIA_KINDS = {"muse-image": "image", "muse-video": "video"}
 
 
-def _chat_media_markdown(res: dict, prompt: str) -> str:
+def _chat_media_markdown(res: dict, prompt: str, request_base: str) -> str:
+    # Selalu URL http absolut: URL relatif dibaca browser sebagai alamat klien (404) dan data: URI dibuang
+    # react-markdown (LibreChat). Klien di Docker memanggil lewat host.docker.internal yang tidak bisa dibuka
+    # browser, jadi untuk mereka MUSE2API_PUBLIC_BASE wajib diisi (deploy/librechat/start.sh memastikannya).
     name, kind = res["filename"], res["kind"]
     label = re.sub(r"[\[\]()\n]+", " ", prompt).strip()[:80] or kind
-    if _public_base():
-        url = media_url(name)
-    elif kind == "image":
-        # URL relatif akan dibaca browser sebagai alamat klien (404), jadi tanpa public_base gambar dikirim utuh.
-        path = res.get("path") or os.path.join(CFG.media_dir, name)
-        mime = mimetypes.guess_type(name)[0] or "image/png"
-        with open(path, "rb") as f:
-            url = f"data:{mime};base64," + base64.b64encode(f.read()).decode()
-    else:
-        return (f"Video selesai dan tersimpan di Media library GemuseAPI (`{name}`). Setel MUSE2API_PUBLIC_BASE "
-                "(mis. http://127.0.0.1:18610) supaya tautan videonya bisa dibuka dari aplikasi chat ini.")
+    url = media_url(name) if _public_base() else f"{request_base}/v1/media/{name}"
     return f"![{label}]({url})" if kind == "image" else f"[Video: {label}]({url})"
 
 
-async def _chat_media(req: "ChatRequest", model: str, refs: list[str] | None):
+async def _chat_media(req: "ChatRequest", model: str, refs: list[str] | None, request_base: str):
     kind = _CHAT_MEDIA_KINDS[model]
     user = next((m for m in reversed(req.messages) if (m.role or "").lower() == "user"), None)
     text = _content_text(user.content).strip() if user else (req.prompt or "").strip()
@@ -1905,7 +1897,7 @@ async def _chat_media(req: "ChatRequest", model: str, refs: list[str] | None):
 
     def run() -> str:
         res, _acc = _run_generation(prompt, kind, timeout, reference_images=refs)
-        return _chat_media_markdown(res, text)
+        return _chat_media_markdown(res, text, request_base)
 
     if not req.stream:
         try:
@@ -1940,7 +1932,7 @@ async def _chat_media(req: "ChatRequest", model: str, refs: list[str] | None):
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: ChatRequest, _=Depends(auth)):
+async def chat_completions(req: ChatRequest, request: Request, _=Depends(auth)):
     """OpenAI 兼容的对话接口 —— 各类智能体客户端都能接。
 
     说明：muse.ai 网页是**自动路由**的 agent，界面上没有模型选择器，所有请求
@@ -1968,7 +1960,7 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
     timeout = int(req.timeout or CFG.chat_timeout)
     images = await _chat_images(req.messages)
     if model in _CHAT_MEDIA_KINDS:
-        return await _chat_media(req, model, images)
+        return await _chat_media(req, model, images, str(request.base_url).rstrip("/"))
     acc = store.pick_account(rotate=True)
     if not acc:
         raise HTTPException(400, "没有可用账号，请先在管理页面导入 cookie")
