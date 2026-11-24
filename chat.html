@@ -100,6 +100,10 @@
   .bubble h1,.bubble h2,.bubble h3,.bubble h4{font-size:16px;line-height:22px;margin:14px 0 6px;font-weight:600}
   .bubble h1:first-child,.bubble h2:first-child,.bubble h3:first-child{margin-top:0}
   .bubble a{color:#9cc2ff}
+  .bubble a.file{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:8px 14px;border:1px solid var(--line);border-radius:12px;color:var(--text);text-decoration:none;font-size:14px}
+  .bubble a.file:hover{background:var(--hover)}
+  .bubble a.file:focus-visible{outline:2px solid #9cc2ff;outline-offset:2px}
+  .bubble a.file svg{width:16px;height:16px;flex:none}
   .bubble code{font:13.5px/20px ui-monospace,SFMono-Regular,Menlo,monospace;background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px}
   .bubble blockquote{margin:0 0 10px;padding-left:12px;border-left:3px solid var(--line);color:var(--muted)}
   .code{position:relative;margin:0 0 10px;border-radius:12px;background:#121213;border:1px solid var(--line);overflow:hidden}
@@ -307,6 +311,8 @@ function inline(s){
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*\w])\*([^*\n]+)\*(?=[^*\w]|$)/g, '$1<em>$2</em>')
+    // File buatan muse (lihat _save_chat_file di app.py): tombol unduh, juga untuk URL relatif.
+    .replace(/\[([^\]\n]+)\]\(((?:https?:\/\/[^\s\/)]+)?\/v1\/files\/[0-9a-f]{32}(?:\.[a-z0-9]{1,10})?(?:\?name=[^\s)"]*)?)\)/g, (_, t, u) => '<a class="file" href="' + u + '" download>' + ICON.down + t + '</a>')
     // Hanya http(s): mencegah javascript: dan data: lewat tautan.
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
 }
@@ -867,6 +873,8 @@ $('threads').addEventListener('click', e => {
   if (busy && cur && cur.id === th.dataset.id) busy.ctrl.abort();
   const gone = chats.find(c => c.id === th.dataset.id);
   if (gone) attDel(gone.messages.filter(m => m.thumbs).map(m => m.id));
+  // File buatan muse ikut dihapus dari server bersama percakapannya.
+  if (gone) for (const m of gone.messages) for (const [, n] of (m.content || '').matchAll(/\/v1\/files\/([0-9a-f]{32}(?:\.[a-z0-9]{1,10})?)/g)) api('/v1/files/' + n, {method: 'DELETE'}).catch(() => {});
   chats = chats.filter(c => c.id !== th.dataset.id); deleted.add(th.dataset.id);
   if (cur && cur.id === th.dataset.id) cur = null;
   persist(); render();

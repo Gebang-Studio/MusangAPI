@@ -32,7 +32,7 @@ MP4 = os.path.join(TMP, "fake.mp4")
 subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x90:rate=8:duration=1",
                 "-pix_fmt", "yuv420p", MP4], check=True)
 
-LOG = {"chat": 0, "media": []}
+LOG = {"chat": 0, "media": [], "deleted": []}
 TASKS = {}
 ERR500 = "模型未生成媒体，仅返回文本: 生成失败了，没能做出这段视频。系统返回了一个内部错误（500），不是提示词或规格的问题。"
 REGION = "没有可生成视频的账号：所有账号均被 Meta 拒绝视频 (video_not_available)"
@@ -62,6 +62,11 @@ class Fake(BaseHTTPRequestHandler):
             self.send_json({"detail": "bad key"}, 401)
             return False
         return True
+
+    def do_DELETE(self):
+        if self.authed():
+            LOG["deleted"].append(self.path)
+            self.send_json({"status": "ok"})
 
     def do_GET(self):
         p = self.path.split("?")[0]
@@ -419,6 +424,17 @@ try:
     until(idle, 8)
     ok("pertanyaan lanjutan tanpa lampiran tidak mengirim ulang gambar", LOG["chat_images"][-1] == [])
 
+    # 14b. file buatan muse: tautan /v1/files jadi tombol unduh; hapus percakapan ikut menghapus filenya
+    F = "/v1/files/" + "a" * 32 + ".txt?name=uji.txt"
+    ok("tautan file muse jadi tombol unduh (hanya pola /v1/files yang sah)",
+       J("(()=>{const d=document.createElement('div');d.innerHTML=md('ini [uji.txt](" + F + ") dan [x](/v1/files/../chats.json) dan [y](javascript:alert(1))');"
+         "const a=d.querySelectorAll('a');return a.length===1&&a[0].classList.contains('file')&&a[0].hasAttribute('download')&&a[0].getAttribute('href')==='" + F + "'})()"))
+    js("(()=>{chats.push({id:'filechat',title:'filechat',model:'muse',updated:1,messages:[{id:'u',role:'user',content:'minta file',ts:1},"
+       "{role:'assistant',content:'ini [uji.txt](" + F + ")',ts:1}]});render()})()")
+    js("document.querySelector('.th[data-id=\"filechat\"] .del').click()")
+    js("document.querySelector('.th[data-id=\"filechat\"] .del').click()")
+    time.sleep(0.5)
+    ok("hapus percakapan ikut menghapus file muse di server", LOG["deleted"] == ["/v1/files/" + "a" * 32 + ".txt"], LOG["deleted"])
     # 15. riwayat: cari + hapus dua klik
     js("(()=>{const q=document.getElementById('q');q.value='kopi';q.dispatchEvent(new Event('input'))})()")
     ok("cari riwayat menyaring percakapan", J("document.querySelectorAll('.th').length===1"))

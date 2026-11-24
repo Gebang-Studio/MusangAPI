@@ -42,7 +42,7 @@ import time
 import uuid
 import zipfile
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
@@ -413,6 +413,25 @@ def _persist_session_cookies(acc_id: str, cookies: dict, cookies_exp: dict | Non
 
 
 engine.cookie_sink = _persist_session_cookies
+
+# File yang dibuat muse di chat (txt/zip/csv/...). Terpisah dari /v1/media: selalu diunduh, tidak pernah dirender,
+# sehingga HTML/SVG buatan muse tidak bisa berjalan di origin muse2api.
+FILES_DIR = os.path.join(CFG.data_dir, "files")
+_FILE_NAME_RE = re.compile(r"^[0-9a-f]{32}(\.[a-z0-9]{1,10})?$")
+
+
+def _save_chat_file(label: str, mime: str, data: bytes) -> str:
+    ext = os.path.splitext(label)[1].lower()
+    name = uuid.uuid4().hex + (ext if re.fullmatch(r"\.[a-z0-9]{1,10}", ext) else "")
+    os.makedirs(FILES_DIR, exist_ok=True)
+    with open(os.path.join(FILES_DIR, name), "wb") as f:
+        f.write(data)
+    from urllib.parse import quote
+    base = _public_base()
+    return f"{base}/v1/files/{name}?name={quote(label, safe='')}"
+
+
+engine.file_sink = _save_chat_file
 
 
 def _renew_and_persist(acc_id: str, wake_vm: bool = True, force: bool = False) -> dict | None:
@@ -2095,6 +2114,25 @@ async def responses_api(req: ResponsesRequest, _=Depends(auth)):
         raise HTTPException(502, str(exc))
 
     return envelope("completed", text)
+
+
+@app.get("/v1/files/{name}")
+def get_chat_file(name: str, filename: str | None = Query(default=None, alias="name")):
+    if not _FILE_NAME_RE.match(name) or not os.path.isfile(os.path.join(FILES_DIR, name)):
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(os.path.join(FILES_DIR, name), media_type="application/octet-stream",
+                        filename=(filename or name).replace("/", "_").replace("\\", "_"),
+                        headers={"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"})
+
+
+@app.delete("/v1/files/{name}")
+def delete_chat_file(name: str, _=Depends(auth)):
+    p = os.path.join(FILES_DIR, name)
+    if not _FILE_NAME_RE.match(name):
+        raise HTTPException(400, "非法文件名")
+    if os.path.isfile(p):
+        os.remove(p)
+    return {"status": "ok"}
 
 
 @app.get("/v1/media/{name}")
