@@ -56,6 +56,8 @@ from engine import (ESSENTIAL_COOKIES, MAX_REFERENCE_IMAGE_BYTES,
 from engine import MuseProxyError, MuseSessionUnavailable
 from store import Store, account_expiry, min_expiry
 from generation_timing import QueuePolicy, QueueSettings, TaskTiming
+from intent import ai_kind, ai_prompt, classify, is_continuation, parse_media_spec
+from memory import ConversationMemory
 from proxy import normalize_server, request_proxy_context, split_proxy_url
 from thumbnails import (VIDEO_FORMATS, ThumbnailUnavailable, clear_thumbnail,
                         source_version, video_thumbnail)
@@ -142,7 +144,9 @@ class AccountPoolManager:
 
     def acquire(self, account_id: str | None = None, preferred_id: str | None = None,
                 rotate: bool = True, force_rotate: bool = False,
-                timeout: float | None = 60.0, record_use: bool = True) -> dict:
+                timeout: float | None = 60.0, record_use: bool = True,
+                skip_ids: set[str] | None = None) -> dict:
+        skip_ids = skip_ids or set()
         deadline = None if timeout is None else time.monotonic() + timeout
         with self.cond:
             while True:
@@ -163,7 +167,7 @@ class AccountPoolManager:
                         preferred_id=pref,
                         rotate=rotate,
                         force_rotate=force_rotate,
-                        exclude_ids=self.busy_accounts,
+                        exclude_ids=self.busy_accounts | skip_ids,
                         record_use=record_use,
                     )
                     if acc:
@@ -173,6 +177,8 @@ class AccountPoolManager:
                 live = [a for a in self.store.accounts if a.get("enabled", True) and a.get("cookies")]
                 if not live:
                     raise MuseAuthError("没有可用账号，请先在管理页面导入 cookie")
+                if not account_id and all(a["id"] in skip_ids for a in live):
+                    raise MuseGenerationError("没有可生成视频的账号：所有账号均被 Meta 拒绝视频 (video_not_available)")
 
                 self.cond.wait(timeout=0.5 if remaining is None else min(remaining, 0.5))
 
@@ -186,8 +192,65 @@ class AccountPoolManager:
 
 GEN_LOCK = ConcurrencyLock(limit=CFG.max_concurrency)
 ACCOUNT_POOL = AccountPoolManager(store)
+
+# Accounts Meta refused video for (per-account region/rollout gate): skipped for video, re-probed after a week.
+# Disimpan ke disk: tanpa itu tiap restart membuang satu percobaan (dan waktu) di akun yang sudah pasti ditolak.
+VIDEO_BLOCKED_PATH = os.path.join(CFG.data_dir, "video-blocked.json")
+try:
+    with open(VIDEO_BLOCKED_PATH, encoding="utf-8") as _f:
+        VIDEO_BLOCKED: dict[str, float] = {str(k): float(v) for k, v in json.load(_f).items()}
+except (OSError, ValueError, AttributeError):
+    VIDEO_BLOCKED = {}
+VIDEO_BLOCK_TTL = 7 * 86400
+_REGION_REFUSAL = re.compile(r"国家|地区|country|region|video_not_available", re.I)
+
+# Pemutus gangguan: saat layanan media muse 5xx, muse mencoba ulang sendiri sampai ~7 menit lalu menyerah, dan halaman
+# tidak memberi tanda lebih awal (diukur 2026-11-24). Setelah OUTAGE_AFTER kegagalan beruntun, permintaan baru langsung
+# ditolak selama OUTAGE_COOLDOWN; sesudahnya satu percobaan dilewatkan untuk menguji pemulihan. Sukses = reset.
+OUTAGE_AFTER, OUTAGE_COOLDOWN = 2, 600
+MEDIA_OUTAGE: dict[str, list[float]] = {"image": [], "video": []}
+_OUTAGE_TEXT = re.compile(r"(?<!\d)50[0-4](?!\d)|过载|上游错误|内部错误|服务(?:现在|暂时|目前)?不可用|overload|upstream|internal error", re.I)
+
+
+def _outage_check(kind: str):
+    fails = MEDIA_OUTAGE.get(kind) or []
+    if len(fails) >= OUTAGE_AFTER and time.time() - fails[-1] < OUTAGE_COOLDOWN:
+        last = time.strftime("%H:%M", time.localtime(fails[-1]))
+        until = time.strftime("%H:%M", time.localtime(fails[-1] + OUTAGE_COOLDOWN))
+        raise MuseGenerationError(
+            f"MUSE_OUTAGE {kind} {len(fails)} {last} {until}：muse 媒体服务连续 {len(fails)} 次返回 5xx（最近 {last}），"
+            f"为免空等约 7 分钟，本次未发送；{until} 后自动恢复尝试")
+
+
+def _outage_record(kind: str, exc: Exception | None):
+    if kind not in MEDIA_OUTAGE:
+        return
+    if exc is None:
+        MEDIA_OUTAGE[kind].clear()
+    elif (isinstance(exc, MuseModelRefusalError) and _OUTAGE_TEXT.search(str(exc))
+          and not _REGION_REFUSAL.search(str(exc))):
+        MEDIA_OUTAGE[kind] = (MEDIA_OUTAGE[kind] + [time.time()])[-5:]
+
+
+def _video_blocked_ids() -> set[str]:
+    now = time.time()
+    for aid, ts in list(VIDEO_BLOCKED.items()):
+        if now - ts > VIDEO_BLOCK_TTL:
+            VIDEO_BLOCKED.pop(aid, None)
+    return set(VIDEO_BLOCKED)
 IMAGE_TASK_LOCK = threading.Lock()
 QUEUE_POLICY = QueuePolicy(os.path.join(CFG.data_dir, "generation-queue.json"))
+MEMORY = ConversationMemory(os.path.join(CFG.data_dir, "conversations.json"), CFG.media_dir)
+
+
+def _apply_memory(req) -> str | None:
+    """Permintaan lanjutan: frame/gambar terakhir jadi acuan pertama + catatan konteks; kembalikan akun pilihan."""
+    refs, note, account = MEMORY.context(req.conversation_id, req.prompt)
+    if refs:
+        req.images = refs + list(req.images or [])
+    if note:
+        req.extra = (note + " " + (req.extra or "")).strip()
+    return account
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -394,7 +457,7 @@ def _renew_and_persist(acc_id: str, wake_vm: bool = True, force: bool = False) -
 
 
 def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
-                     timeout: int, account_id: str | None):
+                     timeout: int, account_id: str | None, images: list[str] | None = None):
     """Acquire a generation slot before the account lease; release both after cleanup."""
     import queue
     q = queue.Queue(maxsize=100)
@@ -449,7 +512,7 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
                     engine.start()
                     for chunk in engine.chat_stream(
                         cur_cookies, prompt, cur_exp, timeout,
-                        account_id=cur_id, stop_event=stop_event
+                        account_id=cur_id, stop_event=stop_event, images=images
                     ):
                         yielded = True
                         q.put(("data", chunk))
@@ -524,6 +587,7 @@ class ImageRequest(BaseModel):
     files: list | None = None
     reference_image: str | None = None
     async_: bool = Field(False, alias="async")
+    conversation_id: str | None = None
 
 
 class VideoRequest(BaseModel):
@@ -542,6 +606,7 @@ class VideoRequest(BaseModel):
     files: list | None = None
     image_url: Any = None
     reference_image: str | None = None
+    conversation_id: str | None = None
 
 
 class ChatMessage(BaseModel):
@@ -796,12 +861,36 @@ def _content_text(content) -> str:
                 t = item.get("type")
                 if t in (None, "text", "input_text", "output_text"):
                     parts.append(str(item.get("text") or ""))
-                elif t == "image_url":
+                elif t in ("image_url", "input_image"):
                     parts.append("[图片]")
             elif isinstance(item, str):
                 parts.append(item)
         return "\n".join(p for p in parts if p)
     return str(content)
+
+
+def _content_images(messages: list[ChatMessage]) -> list[str]:
+    """Gambar di pesan user terakhir (OpenAI image_url / input_image); gambar di riwayat tidak dikirim ulang."""
+    for m in reversed(messages):
+        if (m.role or "").strip().lower() != "user":
+            continue
+        out = []
+        for item in m.content if isinstance(m.content, list) else []:
+            if isinstance(item, dict) and item.get("type") in ("image_url", "input_image"):
+                v = item.get("image_url")
+                v = v.get("url") if isinstance(v, dict) else v
+                if v:
+                    out.append(v)
+        return out
+    return []
+
+
+async def _chat_images(messages: list[ChatMessage]) -> list[str] | None:
+    """Gambar pesan user terakhir, divalidasi seperti acuan media; dipakai chat completions & responses."""
+    images = _content_images(messages)
+    if len(images) > MAX_REFERENCE_IMAGES:
+        raise HTTPException(400, f"图片最多 {MAX_REFERENCE_IMAGES} 张（当前 {len(images)} 张）")
+    return await asyncio.to_thread(_prepare_reference_images, images) if images else None
 
 
 def build_chat_prompt(messages: list[ChatMessage]) -> str:
@@ -979,9 +1068,14 @@ def parse_tool_calls(text: str) -> tuple[list[dict] | None, str]:
 
 def build_video_prompt(r: VideoRequest, kinds: list[str] | None = None) -> str:
     user_prompt = r.prompt.strip()
-    ar = (r.aspect_ratio or "").strip().lower()
+    # Durasi/rasio/resolusi yang ditulis di prompt berlaku bila field API kosong; tanpa angka, muse yang memutuskan.
+    spec = parse_media_spec(user_prompt)
+    ar = (r.aspect_ratio or spec["aspect_ratio"] or "").strip().lower()
     sz = (r.size or "").strip().lower()
-    dur = r.duration or 6
+    dur = r.duration or spec["duration"]
+    dur_txt = f"，时长严格为 {dur} 秒" if dur else ""
+    dur_par = f"（时长严格为 {dur} 秒）" if dur else ""
+    resolution = r.resolution or spec["resolution"]
     refs = _video_references(r)
     has_ref = bool(refs)
     kinds = kinds or ["image"] * len(refs)
@@ -1010,22 +1104,22 @@ def build_video_prompt(r: VideoRequest, kinds: list[str] | None = None) -> str:
     parts = []
     if is_vertical:
         if has_ref:
-            parts.append(f"{reference_instruction}：生成一个严格9:16竖屏手机满屏的动态{gen_word}（9:16 vertical portrait video，720x1280，高大于宽的手机全屏竖版画面，严禁生成横屏或黑边，时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"{reference_instruction}：生成一个严格9:16竖屏手机满屏的动态{gen_word}（9:16 vertical portrait video，720x1280，高大于宽的手机全屏竖版画面，严禁生成横屏或黑边{dur_txt}）：{user_prompt}")
         else:
-            parts.append(f"全新文生视频创作（纯文本全新生成，严禁参考任何历史图片或上下文）：生成一个严格9:16竖屏手机满屏视频（9:16 vertical portrait video，720x1280，高大于宽的手机全屏竖版画面，严禁生成横屏或带有左右黑边，保持垂直构图，时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"全新文生视频创作（纯文本全新生成，严禁参考任何历史图片或上下文）：生成一个严格9:16竖屏手机满屏视频（9:16 vertical portrait video，720x1280，高大于宽的手机全屏竖版画面，严禁生成横屏或带有左右黑边，保持垂直构图{dur_txt}）：{user_prompt}")
     elif any(k in ar or k in sz for k in ("16:9", "16/9", "landscape", "横屏", "1280x720", "1920x1080")):
         if has_ref:
-            parts.append(f"{reference_instruction}：生成一个16:9宽屏横屏{gen_word}（16:9 widescreen landscape video，时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"{reference_instruction}：生成一个16:9宽屏横屏{gen_word}（16:9 widescreen landscape video{dur_txt}）：{user_prompt}")
         else:
-            parts.append(f"全新文生视频创作（纯文本全新生成，严禁参考任何历史图片或上下文）：生成一个16:9横屏宽屏视频（16:9 widescreen landscape video，时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"全新文生视频创作（纯文本全新生成，严禁参考任何历史图片或上下文）：生成一个16:9横屏宽屏视频（16:9 widescreen landscape video{dur_txt}）：{user_prompt}")
     else:
         if has_ref:
-            parts.append(f"{reference_instruction}：生成动态{gen_word}（时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"{reference_instruction}：生成动态{gen_word}{dur_par}：{user_prompt}")
         else:
-            parts.append(f"全新文生视频创作（纯文本全新生成，严禁参考任何历史图片或上下文）：生成一个视频（时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"全新文生视频创作（纯文本全新生成，严禁参考任何历史图片或上下文）：生成一个视频{dur_par}：{user_prompt}")
 
-    if r.resolution:
-        parts.append(f"画质规格：{r.resolution}")
+    if resolution:
+        parts.append(f"画质规格：{resolution}")
     if r.extra:
         parts.append(r.extra)
     return "，".join(parts)
@@ -1142,9 +1236,11 @@ def _run_generation(prompt: str, kind: str, timeout: int,
                     account_id: str | None = None, on_progress=None,
                     reference_image: str | None = None,
                     reference_images: list[str] | None = None,
-                    on_acquired=None, on_account=None, on_queue=None, on_error=None) -> tuple[dict, str | None]:
+                    on_acquired=None, on_account=None, on_queue=None, on_error=None,
+                    preferred_id: str | None = None) -> tuple[dict, str | None]:
     if not any(a.get("enabled", True) and a.get("cookies") for a in store.accounts):
         raise MuseGenerationError("没有可用的生成账号，请检查账号池")
+    _outage_check(kind)
     queue_timeout = QUEUE_POLICY.settings()["queue_timeout"]
     t0 = time.monotonic()
     acquired = GEN_LOCK.acquire(timeout=queue_timeout or None)
@@ -1153,11 +1249,17 @@ def _run_generation(prompt: str, kind: str, timeout: int,
     if not acquired:
         raise MuseGenerationError("排队时限已到，尚未开始生成；请稍后重试或调整独立排队时限")
     try:
-        return _run_generation_locked(prompt, kind, timeout, account_id,
+        res = _run_generation_locked(prompt, kind, timeout, account_id,
                                       on_progress, reference_image, reference_images,
                                       on_acquired=on_acquired, on_account=on_account,
                                       on_queue=on_queue, on_error=on_error,
-                                      queued=queued, queue_timeout=queue_timeout)
+                                      queued=queued, queue_timeout=queue_timeout,
+                                      preferred_id=preferred_id)
+        _outage_record(kind, None)
+        return res
+    except Exception as exc:
+        _outage_record(kind, exc)
+        raise
     finally:
         GEN_LOCK.release()
 
@@ -1167,7 +1269,8 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                     reference_image: str | None = None,
                     reference_images: list[str] | None = None,
                     deadline=None, on_acquired=None, on_account=None,
-                    on_queue=None, on_error=None, queued=0.0, queue_timeout=None) -> tuple[dict, str | None]:
+                    on_queue=None, on_error=None, queued=0.0, queue_timeout=None,
+                    preferred_id: str | None = None) -> tuple[dict, str | None]:
     if queue_timeout is None:
         queue_timeout = QUEUE_POLICY.settings()["queue_timeout"]
 
@@ -1185,16 +1288,22 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                 deadline += waited
             _generation_callback(on_queue, queued)
 
-    cur_acc = lease(account_id=account_id, preferred_id=None, rotate=True)
+    # Pinned accounts and non-video refusals stay terminal; only a pooled video region refusal fails over.
+    video_pool = kind == "video" and not account_id
+    skip = _video_blocked_ids() if video_pool else set()
+    # Lanjutan percakapan diusahakan di akun yang sama; bila diblokir/sibuk, pool memilih akun lain.
+    pref = None if account_id or preferred_id in skip else preferred_id
+    cur_acc = lease(account_id=account_id, preferred_id=pref, rotate=not pref, skip_ids=skip)
     if deadline is None:
         deadline = time.monotonic() + max(1, timeout)
     last_exc = None
+    failover = False
     try:
         if on_acquired:
             on_acquired()
         for attempt in range(2):
             # Preserve the original failure, including a refusal at the deadline boundary.
-            if isinstance(last_exc, MuseModelRefusalError) or time.monotonic() >= deadline:
+            if (isinstance(last_exc, MuseModelRefusalError) and not failover) or time.monotonic() >= deadline:
                 if last_exc is not None:
                     raise last_exc
                 raise MuseGenerationError("生成时限已到（不含排队时间），已停止等待")
@@ -1204,7 +1313,7 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                     ACCOUNT_POOL.release(old_id)
                 cur_acc = None
                 try:
-                    alt = lease(rotate=True, force_rotate=True)
+                    alt = lease(rotate=True, force_rotate=True, skip_ids=skip)
                 except (MuseAuthError, MuseGenerationError):
                     raise last_exc
                 cur_acc = alt
@@ -1243,6 +1352,17 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                 engine.close_current_page()
             except MuseGenerationError as exc:
                 last_exc = exc
+                failover = (video_pool and isinstance(exc, MuseModelRefusalError)
+                            and bool(_REGION_REFUSAL.search(str(exc))))
+                if failover:
+                    VIDEO_BLOCKED[cur_acc["id"]] = time.time()
+                    try:
+                        with open(VIDEO_BLOCKED_PATH, "w", encoding="utf-8") as f:
+                            json.dump(VIDEO_BLOCKED, f)
+                    except OSError:
+                        log.warning("video-blocked.json tidak bisa ditulis")
+                    skip.add(cur_acc["id"])
+                    log.warning("账号 %s 视频被 Meta 拒绝 (region)，切换其他账号", cur_acc["id"])
                 store.mark(cur_acc["id"], True, f"任务异常: {str(exc)[:200]}")
                 try:
                     engine.reset_thread()
@@ -1318,7 +1438,8 @@ def _prepare_reference_images(images: list[str]) -> list[str]:
 
 
 def _queue_image(req: ImageRequest, prompt: str, reference_images: list[str],
-                 idempotency_key: str | None = None):
+                 idempotency_key: str | None = None, preferred_id: str | None = None,
+                 user_prompt: str | None = None):
     """Opt-in polling avoids reverse-proxy timeouts; no generation is repeated by polling."""
     if idempotency_key and len(idempotency_key) > 256:
         raise HTTPException(400, "Idempotency-Key too long")
@@ -1359,7 +1480,8 @@ def _queue_image(req: ImageRequest, prompt: str, reference_images: list[str],
                 reference_images=reference_images,
                 on_progress=lambda p: store.update_task(tid, progress=p),
                 on_acquired=_on_acquired, on_account=timing.account,
-                on_queue=timing.queued, on_error=timing.error)
+                on_queue=timing.queued, on_error=timing.error, preferred_id=preferred_id)
+            MEMORY.remember(req.conversation_id, "image", user_prompt or req.prompt, res["filename"], acc_id)
             # Store only media metadata, not large base64 payloads or reference credentials.
             store.update_task(tid, status="completed", progress=100, account=acc_id,
                               **timing.finish(),
@@ -1376,11 +1498,77 @@ def _queue_image(req: ImageRequest, prompt: str, reference_images: list[str],
         "progress": 0, "created_at": task["created_at"]})
 
 
+class IntentRequest(BaseModel):
+    text: str
+    last_kind: str | None = None
+    attachments: int = Field(0, ge=0, le=MAX_REFERENCE_IMAGES)
+    history: list[dict] = Field(default_factory=list, max_length=20)
+
+
+INTENT_AI_TIMEOUT = 60
+
+
+def _ask_muse(prompt: str) -> str:
+    acc = store.pick_account(rotate=True)
+    if not acc:
+        raise MuseGenerationError("tidak ada akun")
+    return "".join(safe_chat_stream(acc["cookies"], prompt, acc.get("cookies_exp"), INTENT_AI_TIMEOUT,
+                                    account_id=acc["id"]))
+
+
+@app.post("/v1/intent")
+def intent(req: IntentRequest, _=Depends(auth)):
+    """Model "muse": jenis (chat/image/video) + durasi/rasio/resolusi, diputuskan sebelum kuota terpakai.
+
+    Jenis diputuskan model chat muse yang membaca konteks; heuristik kata kunci hanya cadangan bila muse gagal."""
+    out = classify(req.text, req.last_kind, req.attachments)
+    if out["reason"].startswith("perintah /"):
+        return out  # /video, /gambar, /chat: pilihan eksplisit pengguna
+    try:
+        kind = ai_kind(_ask_muse(ai_prompt(req.text, req.history, req.attachments)))
+    except Exception as exc:  # noqa: BLE001 - router tidak boleh menggagalkan pesan
+        kind = None
+        log.warning("intent AI gagal (%s), pakai heuristik", type(exc).__name__)
+    if kind:
+        out.update(kind=kind, reason="AI muse", **{"continue": is_continuation(out["prompt"]) and kind != "chat"})
+    log.info("intent %s/%s: %r", out["kind"], out["reason"], (req.text or "")[:80])
+    return out
+
+
+CHATS_PATH = os.path.join(CFG.data_dir, "chats.json")
+CHATS_LOCK = threading.Lock()
+
+
+@app.get("/v1/chats")
+def get_chats(_=Depends(auth)):
+    """Riwayat percakapan /chat, disimpan di server agar sama di semua browser/profil."""
+    with CHATS_LOCK:
+        try:
+            with open(CHATS_PATH, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return []
+
+
+@app.put("/v1/chats")
+def put_chats(chats: list[dict] = Body(...), _=Depends(auth)):
+    # shortcut: seluruh daftar ditimpa (last-write-wins); dua tab yang menulis bersamaan bisa saling timpa.
+    with CHATS_LOCK:
+        tmp = CHATS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(chats, f, ensure_ascii=False)
+        os.replace(tmp, CHATS_PATH)
+    return {"status": "ok", "count": len(chats)}
+
+
 @app.post("/v1/images/tasks")
 def create_image_task(req: ImageRequest,
                       idempotency_key: str | None = Header(default=None), _=Depends(auth)):
+    user_prompt = req.prompt
+    preferred = _apply_memory(req)
     refs = _prepare_reference_images(_image_references(req))
-    return _queue_image(req, build_image_prompt(req, _reference_kinds(refs)), refs, idempotency_key)
+    return _queue_image(req, build_image_prompt(req, _reference_kinds(refs)), refs, idempotency_key,
+                        preferred, user_prompt)
 
 
 @app.get("/v1/images/tasks/{task_id}")
@@ -1519,6 +1707,8 @@ async def images_edits(request: Request, _=Depends(auth)):
 @app.post("/v1/videos")
 @app.post("/v1/videos/generations")
 async def create_video(req: VideoRequest, _=Depends(auth)):
+    user_prompt = req.prompt
+    preferred = _apply_memory(req)
     ref_images = await asyncio.to_thread(
         _prepare_reference_images, _video_references(req))
 
@@ -1539,7 +1729,8 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
                 store.update_task(task["id"], progress=p)
             res, acc_id = _run_generation(prompt, "video", timeout, on_progress=prog_cb,
                                           reference_images=ref_images, on_acquired=_on_acquired, on_account=timing.account,
-                on_queue=timing.queued, on_error=timing.error)
+                on_queue=timing.queued, on_error=timing.error, preferred_id=preferred)
+            MEMORY.remember(req.conversation_id, "video", user_prompt, res["filename"], acc_id)
             vurl = media_url(res["filename"])
             store.update_task(task["id"], status="completed", progress=100, account=acc_id,
                               **timing.finish(),
@@ -1653,6 +1844,7 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
 
     model = resolve_model(req.model, default="muse-spark")
     timeout = int(req.timeout or CFG.chat_timeout)
+    images = await _chat_images(req.messages)
     acc = store.pick_account(rotate=True)
     if not acc:
         raise HTTPException(400, "没有可用账号，请先在管理页面导入 cookie")
@@ -1678,7 +1870,7 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
                 # 握手建立瞬间立即发送 role: assistant 首包，让下游客户端秒级捕获光标
                 yield _sse(_chat_chunk(cid, created, model, {"role": "assistant"}))
 
-                stream_gen = safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id)
+                stream_gen = safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images)
                 if not tool_note:
                     for chunk in stream_gen:
                         for piece in _pace_text(chunk):
@@ -1740,7 +1932,7 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
         return StreamingResponse(sync_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
     def run() -> str:
-        return "".join(safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id))
+        return "".join(safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images))
 
     try:
         text = await asyncio.to_thread(run)
@@ -1789,6 +1981,8 @@ def _responses_messages(req: ResponsesRequest) -> list[ChatMessage]:
                                         content=item.get("content")))
             elif itype == "input_text":
                 msgs.append(ChatMessage(role="user", content=item.get("text")))
+            elif itype == "input_image":
+                msgs.append(ChatMessage(role="user", content=[item]))
             elif itype == "function_call_output":
                 msgs.append(ChatMessage(role="user", content="【工具执行结果】\n"
                                         + str(item.get("output") or "")))
@@ -1809,9 +2003,11 @@ async def responses_api(req: ResponsesRequest, _=Depends(auth)):
     只实现 Codex 实际用到的子集：文本进 → 文本出（含流式事件）。
     muse.ai 不会返回结构化的 tool_calls，关于工具调用的边界见 README。
     """
-    prompt = build_chat_prompt(_responses_messages(req))
+    messages = _responses_messages(req)
+    prompt = build_chat_prompt(messages)
     if not prompt:
         raise HTTPException(400, "input 为空")
+    images = await _chat_images(messages)
 
     model = resolve_model(req.model, default="muse-spark")
     timeout = int(req.timeout or CFG.chat_timeout)
@@ -1851,7 +2047,7 @@ async def responses_api(req: ResponsesRequest, _=Depends(auth)):
                     "part": {"type": "output_text", "text": "",
                              "annotations": []}})
                 full = ""
-                for chunk in safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id):
+                for chunk in safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images):
                     full += chunk
                     yield _sse_event("response.output_text.delta", {
                         "type": "response.output_text.delta", "item_id": mid,
@@ -1876,7 +2072,7 @@ async def responses_api(req: ResponsesRequest, _=Depends(auth)):
         return StreamingResponse(sync_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
     def run() -> str:
-        return "".join(safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id))
+        return "".join(safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images))
 
     try:
         text = await asyncio.to_thread(run)
@@ -2426,14 +2622,30 @@ def _admin_html() -> str:
                 "<code>/v1/videos</code></p></body>")
 
 
+# Halaman utama = chat ala muse.ai; konsol akun tetap di /admin.
 @app.get("/", response_class=HTMLResponse)
-def index():
-    return HTMLResponse(_admin_html(), headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"})
+@app.get("/chat", response_class=HTMLResponse)
+def chat_page():
+    try:
+        with open(os.path.join(BASE_DIR, "chat.html"), encoding="utf-8") as f:
+            html = f.read()
+    except OSError:
+        raise HTTPException(404, "chat.html 缺失")
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"})
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin_page():
+def admin_page(embed: str | None = None):
+    # Tanpa embed: shell chat yang membuka bagian Admin; konsol asli dimuat shell lewat iframe ?embed=1.
+    if not embed:
+        return chat_page()
     return HTMLResponse(_admin_html(), headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"})
+
+
+@app.get("/theme.css")
+def theme_css():
+    return FileResponse(os.path.join(BASE_DIR, "theme.css"), media_type="text/css",
+                        headers={"Cache-Control": "no-cache"})
 
 
 
@@ -2632,7 +2844,7 @@ MANAGED_DEPLOYMENT = os.environ.get("MUSE2API_MANAGED_DEPLOYMENT", "0") == "1"
 TRACKED_REPO_PATHS = [
     "app.py", "engine.py", "store.py", "cdp.py", "config.py", "proxy.py",
     "generation_timing.py", "thumbnails.py", "GENERATION_QUEUE.md", "VERSION_REPORTING.md",
-    "admin.html", "README.md", "version.json", "requirements.txt",
+    "admin.html", "chat.html", "theme.css", "README.md", "version.json", "requirements.txt",
     "Dockerfile", "docker-compose.yml", ".env.example", ".gitignore",
     "LICENSE", "extension", "deploy", "tools",
 ]

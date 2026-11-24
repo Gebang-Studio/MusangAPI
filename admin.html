@@ -4,12 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>muse2api · 账号池控制台</title>
+<link rel="stylesheet" href="theme.css">
+<script>if (new URLSearchParams(location.search).has('embed')) document.documentElement.classList.add('embed');</script>
 <style>
+  /* Token dari /theme.css (sama dengan halaman chat); nilai kedua = cadangan bila file gagal dimuat. */
   :root{
-    --bg:#0a0e17; --bg2:#0e1421; --panel:#121a2b; --panel2:#0f1626;
-    --line:#20293d; --line2:#2b3550; --text:#e7eaf3; --muted:#8590a8;
-    --accent:#4f8cff; --accent2:#2563eb; --ok:#34d399; --bad:#f87171;
-    --warn:#fbbf24; --purple:#a78bfa; --radius:12px;
+    --bg:var(--m-bg,#181819); --bg2:var(--m-sunken,#121213); --panel:var(--m-surface,#1f1f20); --panel2:var(--m-surface,#1f1f20);
+    --line:var(--m-line,rgba(255,255,255,.12)); --line2:var(--m-line-2,rgba(255,255,255,.18)); --text:var(--m-text,#fff); --muted:var(--m-muted,rgba(242,247,255,.6));
+    --accent:var(--m-link,#9cc2ff); --accent2:var(--m-surface-2,#2c2c2e); --ok:var(--m-ok,#4ade80); --bad:var(--m-bad,#ff8a80);
+    --warn:var(--m-warn,#fbbf24); --purple:#c4b5fd; --radius:var(--m-r-card,20px);
   }
   *{box-sizing:border-box}
   body{
@@ -204,7 +207,147 @@
   .keybox.ok .lbl{color:var(--ok)}
   .keybox.miss .lbl{color:var(--warn)}
   .langsel{width:auto;flex:0 0 auto;background:var(--bg2);color:var(--text);border:1px solid var(--line2);border-radius:999px;padding:4px 10px;font-size:12px;cursor:pointer}
+  /* ---------- Gaya muse.ai (menimpa aturan di atas; ID dan struktur tidak diubah) ---------- */
+  body{background:var(--bg);font-family:var(--m-font,system-ui,sans-serif)}
+  :focus-visible{outline:2px solid var(--m-focus,#8ab4ff);outline-offset:2px}
+  header{background:var(--bg);backdrop-filter:none}
+  .logo .dot{background:var(--text);box-shadow:none}
+  .pill,.keybox,.langsel{background:var(--m-hover,rgba(255,255,255,.06));border-color:transparent}
+  .keybox{border-radius:999px}
+  .card,.stat{background:var(--panel);border-color:transparent}
+  .card>h3{flex-wrap:wrap}
+  .card>h3 .tag{border-color:transparent;border-radius:var(--m-r-ctrl,12px)}
+  input[type=text],input[type=number],.proxy-dialog input[type=password],textarea,select{border-radius:var(--m-r-ctrl,12px)}
+  input:focus,textarea:focus,select:focus{border-color:var(--m-focus,#8ab4ff);box-shadow:none}
+  button,.btnlike{background:var(--text);color:var(--m-on-primary,#111);border-radius:999px}
+  button:hover,.btnlike:hover{background:var(--text);color:var(--m-on-primary,#111);opacity:.88}
+  button.ghost,button.secondary,.btnlike.ghostlike{background:transparent;border:1px solid var(--line);color:var(--text);opacity:1}
+  button.ghost:hover,button.secondary:hover,.btnlike.ghostlike:hover{background:var(--m-hover,rgba(255,255,255,.06));border-color:var(--line2);color:var(--text)}
+  button.danger{background:transparent;color:var(--bad);opacity:1}
+  button.danger:hover{background:var(--m-bad-bg,rgba(255,99,88,.12));color:var(--bad)}
+  .stepno{background:var(--m-surface-2,#2c2c2e);color:var(--text)}
+  .stepbox,td{border-bottom-color:var(--m-hover,rgba(255,255,255,.06))}
+  tbody tr:hover{background:var(--m-hover,rgba(255,255,255,.06))}
+  .tile:hover{border-color:var(--line2)}
+  .tile .thumb,.result img,.result video,pre.out,pre.code{background:var(--bg2)}
+  .badge.info{border-color:var(--line);background:var(--m-hover,rgba(255,255,255,.06))}
+  .toast{background:var(--m-surface-2,#2c2c2e);border-radius:14px}
+  nav.tabs button,nav.tabs button:hover{background:transparent;color:var(--muted);opacity:1;border-radius:0}
+  nav.tabs button.active{color:var(--text);border-bottom-color:var(--text)}
+  #keepaliveBadge{white-space:normal}
+  .c{color:var(--muted)}
+  a:not(.pill):not(.btnlike){text-decoration:underline;text-underline-offset:2px}
+  /* Di dalam shell (/admin → iframe ?embed=1): navigasi pindah ke sidebar shell. */
+  html.embed nav.tabs{display:none}
+  html.embed header{position:static}
+  html.embed .pills{margin-left:0;flex-basis:100%}
+  html.embed .keybox input{width:140px}
   .updpill-alert{border-color:rgba(251,191,36,.8)!important;background:rgba(251,191,36,.15)!important;color:var(--warn)!important;animation:pulse 1.6s infinite}
+  /* Warna hanya untuk status nyata: bingkai biru/hijau dekoratif, gradien, titik logo, dan denyut tanpa henti dihapus. */
+  .logo .dot{display:none}
+  .card[style*="border-color"]:not(#extensionUpgradeNotice){border-color:transparent!important}
+  .banner,#updateBanner{background:var(--panel)!important}
+  #updateBanner{border-color:var(--line2)!important}
+  #updateBanner b{color:var(--text)!important}
+  .updpill-alert,.keybox.miss{animation:none!important}
+  /* Statistik = satu strip dengan pemisah 1px, bukan lima kartu; angka berwarna hanya bila > 0. */
+  .stats{gap:1px;background:var(--line);border-radius:var(--radius);overflow:hidden}
+  .stats .stat{background:var(--panel);border:0;border-radius:0}
+  .stats .stat .v{color:var(--text)}
+  .stats .stat.r .v.alert{color:var(--bad)}
+  .stats .stat.y .v.alert{color:var(--warn)}
+  /* Tabel tugas: durasi dan waktu tidak dipecah per kata; tabel menggulir di dalam wadahnya. */
+  #taskBody td:nth-child(n+4):nth-child(-n+6){white-space:nowrap}
+  #taskBody td:nth-child(7){min-width:280px}
+  /* HP: subjudul sudah diwakili header shell "Admin · <bagian>". */
+  @media (max-width:600px){html.embed .logo small{display:none}}
+  /* ---------- Tata letak per tab (keputusan di PLAN_CHAT.md, tahap 4). Di dalam iframe, @media = lebar iframe.
+     ds-allow-hardcode:start (ukuran target sentuh WCAG dan breakpoint) ---------- */
+  /* Notice extension hanya relevan saat mengimpor cookie. */
+  main:not(:has(#tab-cookie.active)) #extensionUpgradeNotice{display:none}
+  /* Akun: tugas utama (tabel akun) naik ke atas; info koneksi dan antrean turun. */
+  #tab-pool.active{display:flex;flex-direction:column}
+  #tab-pool>.stats{order:1}
+  #tab-pool>.card:has(#poolBody){order:2}
+  #tab-pool>.card:has(#newCookie){order:3}
+  #tab-pool>.card:has(#inBase){order:4}
+  #tab-pool>#generationQueuePanel{order:5}
+  #tab-pool td:first-child,#tab-pool thead th:first-child{position:sticky;left:0;z-index:1;background:var(--panel)}
+  /* Kolom prioritas: tabel akun butuh ~1114px; di bawah itu kolom diagnosis disembunyikan dulu (Cookie, lalu Terakhir dipakai). */
+  @media (max-width:1279px){
+    #tab-pool :is(th,td){padding-left:10px;padding-right:10px}
+    #tab-pool tr>:nth-child(7):not([colspan]){display:none}
+  }
+  @media (max-width:999px){#tab-pool tr>:nth-child(8):not([colspan]){display:none}}
+  .stats{display:flex;flex-wrap:wrap}
+  .stats .stat{flex:1 1 120px}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(min(190px,100%),1fr))}
+  .btnlike{display:inline-flex;align-items:center;justify-content:center}
+  button,.btnlike,a.pill,select,input[type=text],input[type=number],input[type=password]{min-height:32px}
+  @media (max-width:768px){
+    button,.btnlike,a.pill,select,input[type=text],input[type=number],input[type=password]{min-height:44px}
+  }
+  @media (max-width:600px){.live{display:none}}
+  /* Tabel selain tabel akun: di layar sempit tiap baris jadi blok berlabel (label dari <th>, lihat labelCells). */
+  @media (max-width:640px){
+    .tblwrap:not(:has(#poolBody)){overflow:visible;border:0;border-radius:0}
+    .tblwrap:not(:has(#poolBody)) :is(table,tbody,tr){display:block;width:auto}
+    .tblwrap:not(:has(#poolBody)) thead{display:none}
+    .tblwrap:not(:has(#poolBody)) tr{background:var(--bg2);border-radius:var(--m-r-ctrl,12px);padding:6px 14px;margin-bottom:8px}
+    /* Label mengambang di kiri; isi sel tetap satu aliran teks (grid memecah teks + <b> jadi item terpisah), flow-root menampung label 2 baris. */
+    .tblwrap:not(:has(#poolBody)) td{display:flow-root;padding:6px 0 6px 108px;border:0;min-width:0;overflow-wrap:anywhere}
+    .tblwrap:not(:has(#poolBody)) td::before{content:attr(data-label);float:left;width:96px;margin-left:-108px;color:var(--muted);font-size:12px;font-family:var(--m-font,system-ui,sans-serif)}
+    .tblwrap:not(:has(#poolBody)) td:not([data-label]){padding-left:0}
+    .tblwrap:not(:has(#poolBody)) td:not([data-label])::before{content:none}
+    .tblwrap:not(:has(#poolBody)) .ellip{max-width:100%;white-space:normal}
+  }
+  /* Tugas: tabel 8 kolom butuh ~1440px; di bawahnya tiap baris jadi kartu. Field sudah berlabel sendiri (badge, prompt, "Queue/Total"). */
+  @media (max-width:1439px){
+    #tab-tasks .tblwrap{overflow:visible;border:0;border-radius:0}
+    #tab-tasks .tblwrap :is(table,tbody){display:block;width:auto}
+    #tab-tasks .tblwrap thead{display:none}
+    #tab-tasks #taskBody tr{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:12px 14px;margin-bottom:8px;background:var(--bg2);border-radius:var(--m-r-ctrl,12px)}
+    #tab-tasks #taskBody td{display:block;padding:0;border:0;min-width:0;overflow-wrap:anywhere}
+    #tab-tasks #taskBody td::before{content:none}
+    #tab-tasks #taskBody .ellip{max-width:100%;white-space:normal}
+    /* Kartu lebar (712-1279px): batasi panjang baris teks dan jarak tombol Del dari isinya. */
+    #tab-tasks #taskBody tr{max-width:880px}
+    #tab-tasks #taskBody td:nth-child(4){order:1}
+    #tab-tasks #taskBody td:nth-child(2){order:2}
+    #tab-tasks #taskBody td:nth-child(8){order:3;margin-left:auto}
+    #tab-tasks #taskBody td:nth-child(3),#tab-tasks #taskBody td:nth-child(7),#tab-tasks #taskBody td:nth-child(1){flex-basis:100%}
+    #tab-tasks #taskBody td:nth-child(3){order:4}
+    #tab-tasks #taskBody td:nth-child(7){order:5}
+    #tab-tasks #taskBody td:nth-child(5){order:6}
+    #tab-tasks #taskBody td:nth-child(6){order:7;align-self:flex-start}
+    #tab-tasks #taskBody td:nth-child(1){order:8}
+  }
+  /* Ulasan design-critic: tabel akun di HP, Catatan pecah per huruf, warna header sticky, baris skrip cookie, header HP. */
+  #tab-pool thead th:first-child{background:var(--bg2)}
+  #poolBody td.ellip{min-width:12ch;overflow-wrap:break-word}
+  @media (max-width:768px){#tab-pool .acts{min-width:340px}}
+  @media (max-width:640px){
+    #tab-pool tr>:nth-child(2):not([colspan]){display:none}
+    .row:has(#cmdBox){flex-direction:column;align-items:stretch}
+    .row:has(#cmdBox)>div{width:100%;min-width:0;flex:none}
+    #cmdBox{max-width:100%}
+  }
+  @media (max-width:600px){
+    html.embed .logo{flex-wrap:nowrap}
+    html.embed #btnRepoTop{min-width:0;overflow:hidden}
+    #repoTopTxt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    html.embed .keybox input{width:80px}
+  }
+  .tile .meta .ac>*,#taskBody a{display:inline-flex;align-items:center;min-height:32px}
+  .tile .meta .ac>*{padding:0 12px}
+  .tile .check-tag{min-width:32px;min-height:32px}
+  @media (max-width:768px){
+    pre.code{padding-top:60px}
+    .tile .meta .ac>*,#taskBody a{min-height:44px}
+    .tile .check-tag{min-width:44px;min-height:44px}
+  }
+  input[type=checkbox]{width:24px;height:24px}
+  /* ds-allow-hardcode:end */
 </style>
 </head>
 <body>
@@ -218,7 +361,7 @@
         <b>GitHub 仓库</b>
       </a>
       <button class="ghost mini" onclick="toggleRepoPanel()" id="btnRepoTop" style="display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 11px;font-size:12px" title="查看官方仓库最新版本状态与更新通知">
-        📦 <span id="repoTopTxt">版本检测</span>
+        <span id="repoTopTxt">版本检测</span>
       </button>
     </div>
     <div class="pills">
@@ -231,7 +374,7 @@
         <input id="key" type="password" placeholder="粘贴 m2a_ 开头的密钥" autocomplete="off">
         <button class="ghost mini" onclick="saveKey()">保存</button>
       </span>
-      <select id="langSel" class="langsel" data-no-i18n onchange="setLang(this.value)" title="Language / 语言">
+      <!-- ds-allow-native-select: 2-4 opsi; picker native lebih baik di HP dan keyboard --><select id="langSel" class="langsel" data-no-i18n onchange="setLang(this.value)" title="Language / 语言">
         <option value="zh">中文</option>
         <option value="en">English</option>
       </select>
@@ -243,7 +386,7 @@
   <!-- 实时新版本更新通知横幅（当官方仓库有新提交/新版本时自动向所有已部署用户弹出） -->
   <div class="banner" id="updateBanner" style="border-color:rgba(79,140,255,.65);background:linear-gradient(90deg,rgba(79,140,255,.16),rgba(167,139,250,.05));align-items:center;justify-content:space-between;flex-wrap:wrap">
     <div style="display:flex;gap:12px;align-items:flex-start;flex:1;min-width:260px">
-      <span class="ic">🔔</span>
+      
       <div>
         <b style="color:#60a5fa">检测到 muse2api 官方仓库发布了新版本更新！</b>
         <span id="updBannerVer" class="badge info" style="margin-left:8px">新版本</span><br>
@@ -251,7 +394,7 @@
       </div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <button onclick="upgradeNow()" id="btnBannerUpgrade">⚡ 一键在线升级并重启</button>
+      <button onclick="upgradeNow()" id="btnBannerUpgrade">一键在线升级并重启</button>
       <button class="ghost mini" onclick="toggleRepoPanel()">查看更新内容</button>
       <button class="ghost mini" onclick="dismissUpdateBanner()">暂不提醒</button>
     </div>
@@ -268,14 +411,14 @@
     <div class="hint" id="repoStatusDesc" data-i18n="repo-status-desc">正在实时对比本地版本与 GitHub 官方仓库最新版本…（在线升级自动保留 <code>.env</code> 密钥与 <code>data/</code> 账号池及媒体数据）</div>
     <div id="repoCommitsBox" style="margin-top:10px;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:10px 14px;font-size:12.5px"></div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <button onclick="upgradeNow()" id="btnRepoPull">⚡ 一键从 GitHub 在线更新并重启</button>
-      <button class="ghost" onclick="loadRepoStatus(true)">🔍 立即重新检测更新</button>
+      <button onclick="upgradeNow()" id="btnRepoPull">一键从 GitHub 在线更新并重启</button>
+      <button class="ghost" onclick="loadRepoStatus(true)">立即重新检测更新</button>
       <a id="repoCommitsLink" href="https://github.com/czg86389-hub/muse2api/commits/main" target="_blank" class="btnlike ghostlike" style="padding:7px 13px;font-size:12.5px">查看 GitHub 完整提交记录 ↗</a>
     </div>
   </div>
 
   <div class="banner" id="authBanner">
-    <span class="ic">🔑</span>
+    
     <div data-i18n="auth-banner">
       <b>需要先填入 API Key，页面才能读到数据</b><br>
       <span style="color:var(--muted)">
@@ -308,14 +451,14 @@
       <div class="hint">把下面两项填进你的项目就能调用。BASE URL 就是接口地址前缀。</div>
       <div class="row">
         <div style="flex:3">
-          <label>BASE URL（接口地址）</label>
+          <label for="inBase">BASE URL（接口地址）</label>
           <div class="copyline">
             <input type="text" id="inBase" readonly>
             <button class="ghost mini" onclick="copyEl('inBase')">复制</button>
           </div>
         </div>
         <div style="flex:3">
-          <label>API Key（访问密钥）</label>
+          <label for="inKey">API Key（访问密钥）</label>
           <div class="copyline">
             <input type="text" id="inKey" readonly>
             <button class="ghost mini" onclick="toggleKey()" id="keyEye">显示</button>
@@ -372,12 +515,12 @@
 
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:8px">
-        <div style="display:flex;align-items:center;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0">
           <h3 style="margin:0">账号列表 <span class="tag" id="poolCount">0</span></h3>
           <span class="badge ok" id="keepaliveBadge" style="font-size:11px">● 自动保活轮转中 (30m)</span>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="secondary" id="btnKeepaliveAll" onclick="keepaliveAll()" style="font-size:12px;padding:6px 14px">⚡ 一键保活所有账号</button>
+          <button class="secondary" id="btnKeepaliveAll" onclick="keepaliveAll()" style="font-size:12px;padding:6px 14px">一键保活所有账号</button>
         </div>
       </div>
       <div class="hint" data-i18n="keepalive-hint">系统已开启<b>后台每 30 分钟静默保活</b>与<b>多账号公平轮转（LRU）</b>；「测试」会真实打开 muse.ai 验证会话。</div>
@@ -443,14 +586,14 @@
           </div>
           <div class="row">
             <div style="flex:3">
-              <label>BASE URL（填进扩展）</label>
+              <label for="exBase">BASE URL（填进扩展）</label>
               <div class="copyline">
                 <input type="text" id="exBase" readonly>
                 <button class="ghost mini" onclick="copyEl('exBase')">复制</button>
               </div>
             </div>
             <div style="flex:3">
-              <label>API Key（填进扩展）</label>
+              <label for="exKey">API Key（填进扩展）</label>
               <div class="copyline">
                 <input type="text" id="exKey" readonly>
                 <button class="ghost mini" onclick="copyExKey()">复制</button>
@@ -515,7 +658,7 @@
         </div>
         <div style="flex:4;min-width:0">
           <label>② 运行（地址和密钥已帮你填好）</label>
-          <pre class="code" id="cmdBox"><span class="cp" onclick="copyCmd()">复制</span><span id="cmdText">正在生成命令…</span></pre>
+          <pre class="code" id="cmdBox"><button type="button" class="cp" onclick="copyCmd()">复制</button><span id="cmdText">正在生成命令…</span></pre>
         </div>
       </div>
       <div class="hint" style="margin-top:8px">
@@ -584,10 +727,10 @@
       <h3>在线生图测试 <span class="tag">POST /v1/images/generations</span></h3>
       <div class="hint">真实调用 muse.ai 生成，图片约 10–30 秒返回。</div>
       <div class="row">
-        <div style="flex:3"><label>提示词</label>
+        <div style="flex:3"><label for="imgPrompt">提示词</label>
           <input type="text" id="imgPrompt" value="一只戴宇航头盔的柴犬，赛博朋克风格，霓虹灯背景"></div>
-        <div style="max-width:140px"><label>比例</label>
-          <select id="imgSize"><option>1:1</option><option>16:9</option><option>9:16</option><option>4:3</option><option>3:4</option></select></div>
+        <div style="max-width:140px"><label for="imgSize">比例</label>
+          <!-- ds-allow-native-select: 2-4 opsi; picker native lebih baik di HP dan keyboard --><select id="imgSize"><option>1:1</option><option>16:9</option><option>9:16</option><option>4:3</option><option>3:4</option></select></div>
       </div>
       <div style="margin-top:12px"><button class="primary-lg" id="imgBtn" onclick="runImage()">开始生成图片</button></div>
       <div class="result" id="imgRes"></div>
@@ -597,12 +740,12 @@
       <h3>在线生视频测试 <span class="tag">POST /v1/videos</span></h3>
       <div class="hint">异步任务，一般 60–120 秒完成，页面会自动轮询进度。</div>
       <div class="row">
-        <div style="flex:3"><label>提示词</label>
+        <div style="flex:3"><label for="vidPrompt">提示词</label>
           <input type="text" id="vidPrompt" value="一只橙色小猫在草地上慢慢走动，阳光明媚"></div>
-        <div style="max-width:110px"><label>时长(秒)</label>
+        <div style="max-width:110px"><label for="vidDur">时长(秒)</label>
           <input type="number" id="vidDur" value="5" min="1" max="30"></div>
-        <div style="max-width:140px"><label>比例</label>
-          <select id="vidSize"><option>16:9</option><option>9:16</option><option>1:1</option></select></div>
+        <div style="max-width:140px"><label for="vidSize">比例</label>
+          <!-- ds-allow-native-select: 2-4 opsi; picker native lebih baik di HP dan keyboard --><select id="vidSize"><option>16:9</option><option>9:16</option><option>1:1</option></select></div>
       </div>
       <div style="margin-top:12px"><button class="primary-lg" id="vidBtn" onclick="runVideo()">开始生成视频</button></div>
       <div class="result" id="vidRes"></div>
@@ -635,7 +778,7 @@
       </div>
 
       <h4>2. 对话 / 写代码</h4>
-      <pre class="code"><span class="cp" onclick="cp(this)">复制</span><span class="c"># 非流式</span>
+      <pre class="code"><button type="button" class="cp" onclick="cp(this)">复制</button><span class="c"># 非流式</span>
 curl -X POST <span class="s">"BASE/v1/chat/completions"</span> \
   -H <span class="s">"Authorization: Bearer $MUSE2API_KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
@@ -644,7 +787,7 @@ curl -X POST <span class="s">"BASE/v1/chat/completions"</span> \
 <span class="c"># 流式：加 "stream":true，返回标准 SSE（data: {...} / data: [DONE]）</span></pre>
 
       <h4>3. 生图（curl）</h4>
-      <pre class="code"><span class="cp" onclick="cp(this)">复制</span>curl -X POST <span class="s">"BASE/v1/images/generations"</span> \
+      <pre class="code"><button type="button" class="cp" onclick="cp(this)">复制</button>curl -X POST <span class="s">"BASE/v1/images/generations"</span> \
   -H <span class="s">"Authorization: Bearer $MUSE2API_KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
   -d <span class="s">'{"prompt":"一只戴宇航头盔的柴犬","size":"1:1","response_format":"url"}'</span>
@@ -659,7 +802,7 @@ curl -X POST <span class="s">"BASE/v1/chat/completions"</span> \
 <span class="c"># 想要 base64 就传 "response_format":"b64_json"。</span></pre>
 
       <h4>4. 生视频（curl，异步）</h4>
-      <pre class="code"><span class="cp" onclick="cp(this)">复制</span><span class="c"># ① 创建任务</span>
+      <pre class="code"><button type="button" class="cp" onclick="cp(this)">复制</button><span class="c"># ① 创建任务</span>
 curl -X POST <span class="s">"BASE/v1/videos"</span> \
   -H <span class="s">"Authorization: Bearer $MUSE2API_KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
@@ -671,7 +814,7 @@ curl <span class="s">"BASE/v1/videos/task_xxx"</span> -H <span class="s">"Author
 <span class="c"># → {"status":"succeeded","result":{"url":"/v1/media/xxx.mp4"}}</span></pre>
 
       <h4>5. Python（openai SDK 兼容）</h4>
-      <pre class="code"><span class="cp" onclick="cp(this)">复制</span><span class="k">from</span> openai <span class="k">import</span> OpenAI
+      <pre class="code"><button type="button" class="cp" onclick="cp(this)">复制</button><span class="k">from</span> openai <span class="k">import</span> OpenAI
 <span class="k">import</span> time
 
 client = OpenAI(base_url=<span class="s">"BASE/v1"</span>, api_key=<span class="s">"m2a_..."</span>)
@@ -740,12 +883,12 @@ t = requests.post(<span class="s">"BASE/v1/videos"</span>, json={<span class="s"
       <div class="tblwrap"><table>
         <thead><tr><th>客户端类型</th><th>依赖能力</th><th>状态</th></tr></thead>
         <tbody>
-          <tr><td>对话 / 聊天类（桌面端、Web UI、浏览器插件）</td><td class="mono">POST /v1/chat/completions</td><td><span class="badge ok">✅ 可用</span></td></tr>
-          <tr><td>流式输出（打字机效果）</td><td class="mono">stream:true（标准 SSE）</td><td><span class="badge ok">✅ 可用</span></td></tr>
-          <tr><td>代码补全 / 内联补全插件</td><td class="mono">POST /v1/chat/completions</td><td><span class="badge ok">✅ 可用</span></td></tr>
-          <tr><td>翻译 / 总结 / 解释类工具</td><td class="mono">POST /v1/chat/completions</td><td><span class="badge ok">✅ 可用</span></td></tr>
-          <tr><td>画图类客户端</td><td class="mono">POST /v1/images/generations</td><td><span class="badge ok">✅ 可用</span></td></tr>
-          <tr><td>视频生成客户端</td><td class="mono">POST /v1/videos（异步轮询）</td><td><span class="badge ok">✅ 可用</span></td></tr>
+          <tr><td>对话 / 聊天类（桌面端、Web UI、浏览器插件）</td><td class="mono">POST /v1/chat/completions</td><td><span class="badge ok">✓ 可用</span></td></tr>
+          <tr><td>流式输出（打字机效果）</td><td class="mono">stream:true（标准 SSE）</td><td><span class="badge ok">✓ 可用</span></td></tr>
+          <tr><td>代码补全 / 内联补全插件</td><td class="mono">POST /v1/chat/completions</td><td><span class="badge ok">✓ 可用</span></td></tr>
+          <tr><td>翻译 / 总结 / 解释类工具</td><td class="mono">POST /v1/chat/completions</td><td><span class="badge ok">✓ 可用</span></td></tr>
+          <tr><td>画图类客户端</td><td class="mono">POST /v1/images/generations</td><td><span class="badge ok">✓ 可用</span></td></tr>
+          <tr><td>视频生成客户端</td><td class="mono">POST /v1/videos（异步轮询）</td><td><span class="badge ok">✓ 可用</span></td></tr>
           <tr><td>需要「工具调用」的自主 Agent 模式</td><td class="mono">tool_calls / function calling</td><td><span class="badge warn">⚠️ 不可用</span></td></tr>
         </tbody>
       </table></div>
@@ -897,13 +1040,13 @@ const I18N_EN = {
   "检测到 muse2api 官方仓库发布了新版本更新！": "A new muse2api version has been released in the official repository!",
   "新版本": "New version",
   "官方仓库已有新功能或性能优化提交，点击右侧按钮即可一键在线升级（自动保留本地 .env 密钥与账号池数据）。": "The official repository has new features or performance improvements. Click the button on the right to upgrade online in one step (your local .env keys and Account Pool data are kept).",
-  "⚡ 一键在线升级并重启": "⚡ Upgrade online and restart",
+  "一键在线升级并重启": "Upgrade online and restart",
   "查看更新内容": "View changes",
   "暂不提醒": "Remind me later",
   "仓库版本检测与更新": "Official repository version check & online hot upgrade",
   "检测中…": "Checking…",
-  "⚡ 一键从 GitHub 在线更新并重启": "⚡ Update from GitHub and restart",
-  "🔍 立即重新检测更新": "🔍 Check for updates now",
+  "一键从 GitHub 在线更新并重启": "Update from GitHub and restart",
+  "立即重新检测更新": "Check for updates now",
   "查看 GitHub 完整提交记录 ↗": "View full commit history on GitHub ↗",
   "账号池": "Account Pool",
   "获取 Cookie": "Get Cookies",
@@ -935,7 +1078,7 @@ const I18N_EN = {
   "清空": "Clear",
   "账号列表": "Accounts",
   "● 自动保活轮转中 (30m)": "● Auto keep-alive rotation on (30m)",
-  "⚡ 一键保活所有账号": "⚡ Keep all accounts alive now",
+  "一键保活所有账号": "Keep all accounts alive now",
   "标签": "Label",
   "账号 ID": "Account ID",
   "状态": "Status",
@@ -1053,7 +1196,7 @@ const I18N_EN = {
   "客户端类型": "Client type",
   "依赖能力": "Requires",
   "对话 / 聊天类（桌面端、Web UI、浏览器插件）": "Chat clients (desktop, Web UI, browser extensions)",
-  "✅ 可用": "✅ Works",
+  "✓ 可用": "✓ Works",
   "流式输出（打字机效果）": "Streaming output (typewriter effect)",
   "stream:true（标准 SSE）": "stream:true (standard SSE)",
   "代码补全 / 内联补全插件": "Code completion / inline completion plugins",
@@ -1117,7 +1260,7 @@ const I18N_EN = {
   "改名": "Rename",
   "更新Cookie": "Update cookies",
   "删除": "Delete",
-  "🔑 请先在右上角填入 API Key 并点「保存」": "🔑 Enter the API Key in the top-right corner and click \"Save\" first",
+  "请先在右上角填入 API Key 并点「保存」": "Enter the API Key in the top-right corner and click \"Save\" first",
   "请先粘贴 Cookie": "Please paste a cookie first",
   "正在真实打开 muse.ai 校验会话…": "Opening muse.ai to verify the session…",
   "正在为该账号执行会话静默续期…": "Silently renewing the session for this account…",
@@ -1160,15 +1303,15 @@ const I18N_EN = {
   "最新": "latest",
   "最新仓库提交：": "Latest repository commit: ",
   "性能优化与功能更新": "Performance improvements and feature updates",
-  "· 点击右侧「⚡ 一键在线升级并重启」即可自动拉取更新（保留本地配置与账号数据）。": "· Click \"⚡ Upgrade online & restart\" on the right to pull the update automatically (local config and account data are preserved).",
+  "· 点击右侧「一键在线升级并重启」即可自动拉取更新（保留本地配置与账号数据）。": "· Click \"Upgrade online & restart\" on the right to pull the update automatically (local config and account data are preserved).",
   "点击顶部一键升级": "click the one-click upgrade at the top",
   "当前已部署版本：": "Currently deployed: ",
   "（Commit:": " (Commit:",
   "） · GitHub 官方仓库最新：": ") · Latest in official GitHub repo: ",
   "）": ")",
-  "📜 官方仓库最近提交动态：": "📜 Recent commits in the official repository:",
+  "官方仓库最近提交动态：": "Recent commits in the official repository:",
   "暂无提交记录": "No commits yet",
-  "🔔 检测到新版本更新！": "🔔 A new version is available!",
+  "检测到新版本更新！": "A new version is available!",
   "✓ 当前已是官方仓库最新版本": "✓ You are on the latest version of the official repository",
   "待鉴权": "Awaiting auth",
   "确定立即从 GitHub 官方仓库 (czg86389-hub/muse2api) 拉取最新代码并自动重启服务吗？\n\n（注：本地 .env 密钥、账号池 Cookie 和已生成的媒体文件均会自动保留，不受任何影响）": "Pull the latest code from the official GitHub repository (czg86389-hub/muse2api) and restart the service now?\n\n(Note: your local .env keys, account pool cookies and generated media files are preserved automatically and will not be affected)",
@@ -1328,12 +1471,12 @@ const I18N_EN_PATTERNS = ([
   ["在线更新失败：(.*)", "Online update failed: $1"],
   ["任务 (.*?) · (.*?) · 已等待 (\\d+) 秒", "Task $1 · $2 · waited $3s"],
   ["任务 (.*?) · 已等待 (\\d+)s（视频通常 60–120 秒）…", "Task $1 · waited $2s (videos usually take 60–120 seconds)…"],
-  ["🔔 发现新版本 (\\S+) \\((.*)\\)", "🔔 New version $1 available ($2)"],
+  ["发现新版本 (\\S+) \\((.*)\\)", "New version $1 available ($2)"],
   ["发现新更新 \\((.*)\\)", "Update available ($1)"],
-  ["🔔 官方仓库发布了新更新 \\((.*?)\\)：(.*)", "🔔 The official repository has a new update ($1): $2"],
+  ["官方仓库发布了新更新 \\((.*?)\\)：(.*)", "The official repository has a new update ($1): $2"],
   ["✓ 已是最新 (\\S+) \\((.*)\\)", "✓ Up to date $1 ($2)"],
   ["(.*) · 已是最新", "$1 · Up to date"],
-  ["✨ 当前版本核心特性 \\((.*)\\)：", "✨ Key features of this version ($1):"],
+  ["当前版本核心特性 \\((.*)\\)：", "Key features of this version ($1):"],
   ["✓ (.*)，服务正在重启，就绪后将自动刷新页面…", "✓ $1; the service is restarting and the page will refresh when it is ready…"],
   ["(\\S+) \\((.*?)\\) → (\\S+) \\((.*?)\\)", "$1 ($2) → $3 ($4)"],
   ["(.*) 等 (\\d+) 个", "$1 and $2 in total"],
@@ -1563,6 +1706,8 @@ document.querySelectorAll('nav.tabs button').forEach(b => {
     if (b.dataset.t === 'tasks') loadTasks();
     if (b.dataset.t === 'media') loadMedia();
     if (b.dataset.t === 'cookie') $('cmdText').textContent = buildCmd($('inBase').value);
+    // Di dalam shell: beri tahu sidebar tab mana yang aktif (mis. tombol di banner memanggil goTab).
+    if (window.parent !== window) try { parent.postMessage({m2aAdminTab: b.dataset.t}, location.origin); } catch (e) {}
   };
 });
 
@@ -1733,6 +1878,7 @@ async function loadPool(){
     $('sOk').textContent    = st.healthy ?? 0;
     $('sBad').textContent   = st.error ?? 0;
     $('sDis').textContent   = st.disabled ?? 0;
+    ['sBad', 'sDis'].forEach(id => $(id).classList.toggle('alert', +$(id).textContent > 0));
     $('poolCount').textContent = accounts.length;
     $('pAcc').className = 'pill ' + (accounts.length ? 'on' : 'off');
     $('pAcc').innerHTML = `<span class="led"></span>账号 <b>${accounts.length}</b>`;
@@ -1792,7 +1938,7 @@ async function loadPool(){
     }).join('');
   }catch(e){
     $('poolBody').innerHTML = authOK === false
-      ? '<tr><td colspan="10" class="empty">🔑 请先在右上角填入 API Key 并点「保存」</td></tr>'
+      ? '<tr><td colspan="10" class="empty">请先在右上角填入 API Key 并点「保存」</td></tr>'
       : `<tr><td colspan="10" class="empty">加载失败：${esc(e.message)}</td></tr>`;
   }
 }
@@ -1954,7 +2100,7 @@ async function keepaliveAll(){
     loadPool();
   }catch(e){ toast('保活执行失败：' + e.message, 'bad'); }
   finally{
-    if (btn) { btn.disabled = false; btn.innerText = '⚡ 一键保活所有账号'; }
+    if (btn) { btn.disabled = false; btn.innerText = '一键保活所有账号'; }
   }
 }
 
@@ -2333,7 +2479,7 @@ async function loadRepoStatus(force){
     badge.className = 'badge ' + (s.has_update ? 'warn' : s.up_to_date === true ? 'ok' : 'mute');
     badge.textContent = `${state} · ${lVer} (${s.local_sha || 'unknown'})`;
     topBtn.classList.toggle('updpill-alert', !!s.has_update);
-    topBtn.innerHTML = `📦 <span id="repoTopTxt">${esc(lVer)} · ${esc(state)}</span>`;
+    topBtn.innerHTML = `<span id="repoTopTxt">${esc(lVer)} · ${esc(state)}</span>`;
     const bannerHighlights = LANG === 'en' ? (s.highlights_en || s.highlights) : s.highlights;
     $('updBannerVer').textContent = rVer + ' (' + (s.remote_sha || 'unknown') + ')';
     $('updBannerMsg').textContent = s.managed_deployment
@@ -2352,11 +2498,11 @@ async function loadRepoStatus(force){
     let html = '';
     const highlights = (LANG === 'en' && Array.isArray(s.highlights_en) && s.highlights_en.length) ? s.highlights_en : s.highlights;
     if (Array.isArray(highlights) && highlights.length){
-      html += `<div style="margin-bottom:8px"><b style="color:var(--text)">✨ 当前版本核心特性 (${esc(rVer)})：</b><ul style="margin:4px 0 0 18px;padding:0;color:var(--muted)">` +
+      html += `<div style="margin-bottom:8px"><b style="color:var(--text)">当前版本核心特性 (${esc(rVer)})：</b><ul style="margin:4px 0 0 18px;padding:0;color:var(--muted)">` +
         highlights.map(h => `<li>${esc(h)}</li>`).join('') + `</ul></div>`;
     }
     if (Array.isArray(s.recent_commits) && s.recent_commits.length){
-      html += `<div><b style="color:var(--text)">📜 官方仓库最近提交动态：</b><div style="margin-top:5px;display:flex;flex-direction:column;gap:4px">` +
+      html += `<div><b style="color:var(--text)">官方仓库最近提交动态：</b><div style="margin-top:5px;display:flex;flex-direction:column;gap:4px">` +
         s.recent_commits.slice(0, 5).map(c =>
           `<div style="display:flex;gap:8px;align-items:center"><a href="${esc(c.url)}" target="_blank" class="mono" style="color:var(--accent)">[${esc(c.sha)}]</a><span>${esc(c.message)}</span><span class="mono" style="margin-left:auto">${esc((c.date||'').replace('T',' ').replace('Z',''))}</span></div>`
         ).join('') + `</div></div>`;
@@ -2394,8 +2540,8 @@ async function upgradeNow(){
     setTimeout(waitReady, 2500);
   }catch(e){
     toast('在线更新失败：' + e.message, 'bad');
-    if (btn1) { btn1.disabled = false; btn1.textContent = '⚡ 一键从 GitHub 在线更新并重启'; }
-    if (btn2) { btn2.disabled = false; btn2.textContent = '⚡ 一键在线升级并重启'; }
+    if (btn1) { btn1.disabled = false; btn1.textContent = '一键从 GitHub 在线更新并重启'; }
+    if (btn2) { btn2.disabled = false; btn2.textContent = '一键在线升级并重启'; }
   }
 }
 
@@ -2454,6 +2600,20 @@ setInterval(() => {
 setInterval(() => {
   loadRepoStatus(false);
 }, 60000);
+// Tabel bertumpuk di layar sempit butuh label tiap sel; diambil dari <th> (sudah diterjemahkan) setiap kali baris atau bahasa berubah.
+let labelQueued = false;
+function labelCells() {
+  labelQueued = false;
+  document.querySelectorAll('.tblwrap table').forEach(t => {
+    const head = [...t.querySelectorAll('thead th')].map(th => th.textContent.trim());
+    t.querySelectorAll('tbody tr').forEach(r => [...r.cells].forEach((c, i) => {
+      if (head[i] && c.colSpan === 1 && c.dataset.label !== head[i]) c.dataset.label = head[i];
+    }));
+  });
+}
+new MutationObserver(() => { if (!labelQueued) { labelQueued = true; requestAnimationFrame(labelCells); } })
+  .observe(document.body, { childList: true, subtree: true, characterData: true });
+labelCells();
 </script>
 </body>
 </html>
