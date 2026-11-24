@@ -46,6 +46,11 @@ async def main():
     assert (await request("GET", "/v1/chats", key=None))[0] == 401
     assert (await request("PUT", "/v1/chats", {"bukan": "list"}))[0] == 422
     assert await request("GET", "/v1/chats") == (200, chats)
+    # file rusak: GET kosong, tapi isinya disimpan dulu sebelum PUT berikutnya menimpa
+    Path(app.CHATS_PATH).write_text('[{"id": "a1", "title": "pot', encoding="utf-8")
+    assert await request("GET", "/v1/chats") == (200, [])
+    saved = list(Path(app.CHATS_PATH).parent.glob("chats.json.corrupt-*"))
+    assert len(saved) == 1 and saved[0].read_text(encoding="utf-8").startswith('[{"id": "a1"'), saved
     print("ok: chats sync")
 
 

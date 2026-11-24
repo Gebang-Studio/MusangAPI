@@ -114,11 +114,12 @@
   a.mini{text-decoration:none}
   .bubble .tbl{overflow-x:auto;margin:8px 0;border-radius:var(--m-r-ctrl)}
   .bubble table{border-collapse:collapse;font-size:14px;line-height:20px}
-  .bubble th,.bubble td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+  .bubble th,.bubble td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top;overflow-wrap:break-word}
   .bubble th{background:var(--hover);font-weight:600}
   .wrap{width:100%;min-width:0}
   .stamp{text-align:center;font-size:12px;line-height:16px;color:var(--muted);margin:24px 0 8px}
   .note{font-size:13px;color:var(--muted);margin-top:8px}
+  .msg.assistant .bubble:empty{display:none}
   .err{background:var(--bad-bg);color:var(--bad);border-radius:14px;padding:10px 14px;font-size:14px;line-height:20px;margin-top:8px;display:flex;gap:12px;align-items:flex-start;justify-content:space-between}
   .err button{color:var(--text);text-decoration:underline;white-space:nowrap;font-size:14px}
   .media{display:block;max-width:100%;border-radius:14px;margin-top:4px;background:#000}
@@ -242,7 +243,7 @@
         <textarea id="input" rows="1" placeholder="Kirim pesan" autocomplete="off"></textarea>
         <button class="send" id="send" type="submit" aria-label="Kirim" disabled></button>
       </form>
-      <div class="hint">Enter untuk kirim · Shift+Enter baris baru · Riwayat tersimpan di browser ini</div>
+      <div class="hint">Enter untuk kirim · Shift+Enter baris baru · Riwayat tersimpan di server ini</div>
     </div>
   </main>
 
@@ -373,6 +374,7 @@ function friendly(m){
   // Pemutus server: muse gagal beruntun, permintaan sengaja tidak dikirim (lihat _outage_check di app.py).
   const o = m.match(/MUSE_OUTAGE (\w+) (\d+) (\d\d:\d\d) (\d\d:\d\d)/);
   if (o) return 'Layanan ' + (o[1] === 'video' ? 'video' : 'gambar') + ' muse.ai sedang gangguan: ' + o[2] + ' percobaan terakhir gagal (terakhir ' + o[3] + '). Permintaan ini tidak dikirim supaya Anda tidak menunggu sekitar 7 menit. Coba lagi setelah ' + o[4] + '.';
+  if (/prompt 为空/.test(m)) return 'Tulis apa yang ingin dibuat, misalnya: /gambar kucing oren di sofa.';
   if (/没有可用账号/.test(m)) return 'Tidak ada akun muse.ai yang aktif. Impor cookie dulu di Admin › Cookie.';
   if (/超时|timeout/i.test(m)) return 'Muse tidak menjawab sebelum batas waktu. Coba lagi.';
   if (/额度|quota/i.test(m)) return 'Kuota akun habis. Tambah akun atau tunggu kuota pulih.';
@@ -395,19 +397,45 @@ let pushTimer = 0;
 function persist(){
   save(CHAT_STORE, chats);
   clearTimeout(pushTimer);
-  pushTimer = setTimeout(() => api('/v1/chats', {method: 'PUT', body: JSON.stringify(chats)}).catch(() => {}), 800);
+  pushTimer = setTimeout(pushChats, 800);
+}
+// PUT menimpa seluruh daftar, jadi gabungkan dulu dengan server: tab/browser lain bisa sudah menambah atau menghapus.
+async function pushChats(){
+  try {
+    const remote = await (await api('/v1/chats')).json();
+    if (Array.isArray(remote)) merge(remote);
+    await api('/v1/chats', {method: 'PUT', body: JSON.stringify(chats)});
+    chats.forEach(c => synced.add(c.id));
+  } catch {}
+}
+// synced = id yang pernah terlihat di server: hilang dari server -> dihapus di tempat lain; belum pernah -> baru di tab ini.
+// shortcut: per percakapan, `updated` terbaru menang; jeda GET->PUT (milidetik) masih bisa bertabrakan. Upgrade: PUT per percakapan.
+const synced = new Set(), deleted = new Set();
+function merge(remote){
+  const ids = new Set(remote.map(r => r.id)), mine = new Map(chats.map(c => [c.id, c]));
+  const n = chats.length;
+  chats = chats.filter(c => ids.has(c.id) || !synced.has(c.id) || (busy && cur === c));
+  let changed = chats.length !== n;
+  for (const r of remote){
+    synced.add(r.id);
+    const l = mine.get(r.id);
+    if (!l){ if (!deleted.has(r.id)){ chats.push(r); changed = true; } }
+    else if ((r.updated || 0) > (l.updated || 0) && !(busy && cur === l)){ Object.assign(l, r); changed = true; }
+  }
+  if (cur && !chats.includes(cur)) cur = null;
+  if (changed){ save(CHAT_STORE, chats); busy ? renderList() : render(); }
+  return chats.some(c => !ids.has(c.id));
 }
 // Server = sumber utama; localStorage hanya cadangan saat server/key belum bisa dipakai.
-async function pullChats(){
+async function pullChats(first){
   let remote;
   try { remote = await (await api('/v1/chats')).json(); } catch { return; }
   if (!Array.isArray(remote)) return;
-  if (!remote.length){ if (chats.length) persist(); return; }  // pindahkan riwayat lama browser ini ke server
-  if (busy) return;  // jangan ganti daftar di tengah jawaban
-  chats = remote; save(CHAT_STORE, chats);
-  if (cur) cur = chats.find(c => c.id === cur.id) || null;
-  render();
+  // Saat dimuat, daftar server menang (seperti sebelumnya); server kosong -> riwayat lama browser ini dipindahkan ke sana.
+  if (first && remote.length) chats.forEach(c => synced.add(c.id));
+  if (merge(remote)) persist();
 }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pullChats(); });
 function newChat(){ cur = null; render(); $('input').focus(); closeSide(); }
 function openChat(id){ cur = chats.find(c => c.id === id) || null; render(); closeSide(); }
 
@@ -517,18 +545,20 @@ function paint(row, m, i){
   }
 }
 const KEY_MSG = 'API Key belum diisi atau salah.';
+// Sama dengan _OVERRIDE di intent.py: perintah paksa jenis tidak ikut ke model maupun judul.
+const CMD = /^\s*\/(video|vid|gambar|image|img|foto|chat|teks|text|视频|图片)(\s+|$)/i;
 
 /* ---------- Kirim ---------- */
 async function send(text){
   text = text.trim();
   if (!text || busy) return;
   if (!cur){
-    cur = {id: uid(), title: text.replace(/\s+/g, ' ').slice(0, 48), model: 'muse', messages: [], updated: Date.now()};
+    cur = {id: uid(), title: (text.replace(CMD, '') || text).replace(/\s+/g, ' ').slice(0, 48), model: 'muse', messages: [], updated: Date.now()};
     chats.push(cur);
   }
   const msg = {id: uid(), role: 'user', content: text, ts: Date.now()};
   if (atts.length){ msg.thumbs = atts.map(a => a.thumb); attPut(msg.id, atts.map(a => a.data)); atts = []; renderAtts(); }
-  cur.messages.push(msg);
+  cur.messages.push(msg); cur.updated = Date.now(); persist();  // /v1/intent bisa ~8 dtk: reload saat itu tidak boleh menghilangkan pesan
   $('input').value = ''; autosize();
   await answer();
 }
@@ -556,6 +586,10 @@ async function answer(){
   const ctrl = new AbortController();
   busy = {ctrl, m: null};
   setBusy(true);
+  // /v1/intent bisa ~8 dtk: tampilkan pesan user + titik "berpikir" sekarang, bukan setelah jenis diputuskan.
+  render();
+  $('log').appendChild(msgEl({role: 'assistant', content: '', pending: true}, cur.messages.length));
+  toBottom(true);
   // Jenis diputuskan server sebelum kuota terpakai, lalu ditampilkan di bubble.
   const lastMedia = [...cur.messages].reverse().find(x => x.role === 'assistant');
   const user = cur.messages[cur.messages.length - 1];
@@ -596,7 +630,11 @@ async function answer(){
     else await media(kind, m, ctrl.signal, repaint);
   } catch (e) {
     if (e.name === 'AbortError') m.note = kind === 'chat' ? 'Dihentikan.' : 'Berhenti menunggu. Tugas tetap berjalan di server; hasilnya akan muncul di Media library.';
-    else m.error = e.code === 401 ? KEY_MSG : (e.message || 'Gagal terhubung ke server.');
+    else {
+      if (m.spec) m.note = m.spec;  // jangan biarkan "menyiapkan"/"membuat · 45 dtk" di samping pesan error
+      // TypeError = fetch gagal di jaringan ("Failed to fetch"/"network error"): pesan mentah browser tidak berguna.
+      m.error = e.code === 401 ? KEY_MSG : e instanceof TypeError || !e.message ? 'Koneksi ke server terputus. Periksa server lalu coba lagi.' : e.message;
+    }
     if (e.code === 401) openKey();
   } finally {
     m.pending = false; busy = null;
@@ -610,7 +648,7 @@ async function streamChat(m, signal, repaint){
   // Media yang sudah dibuat ikut sebagai catatan supaya muse tahu ("video tadi..."); riwayat sangat panjang dipotong
   // dari yang tertua (shortcut: tanpa ringkasan; tambahkan ringkasan bila percakapan >30rb karakter sering terjadi).
   let messages = cur.messages.filter(x => x !== m && !x.error && (x.kind ? x.url : x.content))
-                             .map(x => ({role: x.role, content: x.kind ? `[${x.kind === 'video' ? 'Video' : 'Gambar'} sudah dibuat dari prompt: ${x.prompt || ''}]` : x.content}));
+                             .map(x => ({role: x.role, content: x.kind ? `[${x.kind === 'video' ? 'Video' : 'Gambar'} sudah dibuat dari prompt: ${x.prompt || ''}]` : x.role === 'user' ? (x.content.replace(CMD, '') || x.content) : x.content}));
   let size = messages.reduce((n, x) => n + x.content.length, 0);
   while (messages.length > 1 && size > 30000){ size -= messages[0].content.length; messages.shift(); }
   if (messages[0] && messages[0].role === 'assistant') messages.shift();
@@ -671,7 +709,7 @@ async function pollTask(kind, m, signal, repaint){
     const s = await (await api((kind === 'image' ? '/v1/images/tasks/' : '/v1/videos/') + encodeURIComponent(m.task), {signal})).json();
     if (s.status === 'completed' || s.status === 'succeeded'){ m.url = kind === 'image' ? s.data[0].url : (s.result && s.result.url) || s.url; break; }
     if (s.status === 'failed') throw new ApiError(friendly(s.error || (kind === 'image' ? 'Gagal membuat gambar.' : 'Gagal membuat video.')));
-    tick(s.status || 'antre'); await wait(kind === 'image' ? 3000 : 4000);
+    tick({queued: 'antre', processing: 'membuat', in_progress: 'membuat'}[s.status] || s.status || 'antre'); await wait(kind === 'image' ? 3000 : 4000);
   }
   m.note = m.spec + ' · selesai dalam ' + Math.round((Date.now() - t0) / 1000) + ' detik.';
 }
@@ -679,7 +717,7 @@ async function pollTask(kind, m, signal, repaint){
 async function resumeTask(c, m){
   const show = () => { if (cur === c) render(); };
   try { await pollTask(m.kind, m, new AbortController().signal, show); }
-  catch (e) { m.error = e.code === 401 ? KEY_MSG : (e.message || 'Gagal memeriksa tugas.'); }
+  catch (e) { if (m.spec) m.note = m.spec; m.error = e.code === 401 ? KEY_MSG : (e.message || 'Gagal memeriksa tugas.'); }
   finally { m.pending = false; persist(); show(); }
 }
 
@@ -829,7 +867,7 @@ $('threads').addEventListener('click', e => {
   if (busy && cur && cur.id === th.dataset.id) busy.ctrl.abort();
   const gone = chats.find(c => c.id === th.dataset.id);
   if (gone) attDel(gone.messages.filter(m => m.thumbs).map(m => m.id));
-  chats = chats.filter(c => c.id !== th.dataset.id);
+  chats = chats.filter(c => c.id !== th.dataset.id); deleted.add(th.dataset.id);
   if (cur && cur.id === th.dataset.id) cur = null;
   persist(); render();
 });
@@ -842,7 +880,7 @@ $('keyForm').addEventListener('submit', () => {
   if ($('keyDlg').returnValue === 'cancel' || document.activeElement.value === 'cancel') return;
   KEY = $('keyIn').value.trim();
   try { localStorage.setItem(KEY_STORE, KEY); } catch {}
-  loadModels(); pullChats();
+  loadModels(); pullChats(true);
 });
 $('menuBtn').onclick = () => openSide($('menuBtn'));
 $('menuBtn2').onclick = () => openSide($('menuBtn2'));
@@ -853,7 +891,9 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSide();
 
 // Jawaban yang tertinggal "pending" (tab ditutup saat stream) ditandai, bukan dibiarkan berputar.
 chats.forEach(c => c.messages.forEach(m => { if (m.pending && m.task && m.kind){ resumeTask(c, m); return; } if (m.pending){ m.pending = false; if (!m.content && !m.url) m.error = 'Terputus sebelum selesai.'; } }));
-setBusy(false); render(); loadModels(); pullChats(); route();
+// Pesan user tanpa jawaban (tab ditutup saat /v1/intent) -> tampilkan "Coba lagi" alih-alih diam.
+chats.forEach(c => { const l = c.messages[c.messages.length - 1]; if (l && l.role === 'user') c.messages.push({role: 'assistant', content: '', ts: Date.now(), error: 'Terputus sebelum selesai.'}); });
+setBusy(false); render(); loadModels(); pullChats(true); route();
 if ($('adminView').hidden) $('input').focus();
 </script>
 </body>

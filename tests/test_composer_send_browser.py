@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix='muse-send-test-', dir=Path.home()) as h
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
     cfg = SimpleNamespace(
-        chromium=shutil.which('chromium') or shutil.which('google-chrome'),
+        chromium=shutil.which('chromium') or shutil.which('google-chrome') or next((p for p in ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'] if Path(p).exists()), None),
         cdp_port=port, home_dir=str(Path.home()), extra_path='',
         profile_dir=home + '/profile', data_dir=home, download_dir=home + '/downloads')
     Path(cfg.download_dir).mkdir()

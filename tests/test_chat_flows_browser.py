@@ -93,7 +93,7 @@ class Fake(BaseHTTPRequestHandler):
         if not self.authed():
             return
         if p == "/v1/intent":
-            time.sleep(0.15)
+            time.sleep(1.5 if "INTENTLAMBAT" in b["text"] else 0.15)  # muse asli ~8 dtk
             return self.send_json(classify(b["text"], b.get("last_kind"), b.get("attachments", 0)))
         if p in ("/v1/images/tasks", "/v1/videos"):
             kind = "image" if "images" in p else "video"
@@ -237,6 +237,35 @@ try:
     ok("markdown: tabel, kode, tombol salin kode",
        J("!!document.querySelector('.msg.assistant:last-of-type table') && !!document.querySelector('.msg.assistant:last-of-type pre code') && !!document.querySelector('.msg.assistant:last-of-type [data-copy-code]')"))
     shot("chat")
+    # 2b. intent lambat: pesan user + titik berpikir tampil sebelum /v1/intent menjawab; /chat tidak ikut ke model/judul
+    js("newChat()")
+    say("/chat pesan uji INTENTLAMBAT")
+    ok("pesan user & indikator berpikir tampil sebelum intent selesai",
+       until("([...document.querySelectorAll('.msg.user .bubble')].pop()||{}).textContent==='/chat pesan uji INTENTLAMBAT' && !!document.querySelector('.msg.assistant:last-of-type .thinking')", 0.8))
+    until(idle, 8)
+    ok("perintah /chat tidak ikut ke model maupun judul",
+       J(last_bubble + ".includes('Anda menulis: pesan uji')") and J("document.getElementById('title').textContent") == "pesan uji INTENTLAMBAT", J(last_bubble)[-60:])
+    ok("sel tabel tidak memotong kata di tengah",
+       J("(()=>{const b=document.querySelector('.msg.assistant:last-of-type .bubble');b.innerHTML=md('| Bahasa | Keterangan |\\n|---|---|\\n| Python | '+'teks panjang '.repeat(80)+'|');const r=document.createRange();r.selectNodeContents(b.querySelector('tbody td'));return r.getClientRects().length===1})()"))
+    # 2c. reload saat /v1/intent belum menjawab: pesan user tetap ada + "Coba lagi", tanpa bubble kosong
+    js("newChat()")
+    say("RELOADUJI INTENTLAMBAT")
+    time.sleep(0.5)
+    js("location.reload()")
+    time.sleep(0.3)
+    until("document.readyState==='complete' && typeof openChat==='function'")
+    js("(c=>c&&openChat(c.id))(chats.find(c=>c.title.startsWith('RELOADUJI')))")
+    ok("reload saat intent: pesan user tidak hilang & ada Coba lagi",
+       J("!!chats.find(c=>c.title.startsWith('RELOADUJI')) && [...document.querySelectorAll('.err button')].some(b=>b.textContent==='Coba lagi')"),
+       J("chats.map(c=>c.title)"))
+    # fetch gagal di jaringan (TypeError) sebelum ada teks: pesan Indonesia, tanpa bubble kosong
+    js("window.__f=window.fetch;window.fetch=(u,o)=>String(u).includes('/v1/chat/completions')?Promise.reject(new TypeError('Failed to fetch')):window.__f(u,o)")
+    say("uji jaringan putus")
+    until(idle + " && !!document.querySelector('.msg.assistant:last-of-type .err')", 8)
+    js("window.fetch=window.__f")
+    ok("error jaringan tampil dalam bahasa Indonesia", J(last_err + ".includes('Koneksi ke server terputus')"), J(last_err))
+    ok("error tanpa teks jawaban tidak menampilkan bubble kosong",
+       J("!document.querySelector('.msg.assistant:last-of-type .bubble').offsetHeight"))
     # 3. XSS
     say('<img src=x onerror="window.__x=1"><script>window.__x=2</script> tolong ulangi teks ini')
     until(idle, 8)
@@ -308,6 +337,7 @@ try:
     until(idle, 15)
     ok("error 500 muse.ai -> pesan Indonesia + Coba lagi",
        J(last_err + ".includes('Server muse.ai gagal')") and J(last_err + ".includes('Coba lagi')") and not J(last_err + ".includes('模型')"), J(last_err))
+    ok("catatan progres tidak tertinggal di samping error", J(last_note) == "Video", J(last_note))
     shot("error")
     say("buatkan video WILAYAH pantai")
     until(idle, 15)

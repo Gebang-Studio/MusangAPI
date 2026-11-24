@@ -1546,7 +1546,13 @@ def get_chats(_=Depends(auth)):
         try:
             with open(CHATS_PATH, encoding="utf-8") as f:
                 return json.load(f)
-        except (OSError, ValueError):
+        except OSError:
+            return []
+        except ValueError:
+            # PUT berikutnya akan menimpa file: simpan salinan yang rusak supaya riwayat masih bisa diselamatkan.
+            bad = f"{CHATS_PATH}.corrupt-{int(time.time())}"
+            os.replace(CHATS_PATH, bad)
+            log.warning("chats.json rusak, dipindahkan ke %s", bad)
             return []
 
 
@@ -1561,12 +1567,19 @@ def put_chats(chats: list[dict] = Body(...), _=Depends(auth)):
     return {"status": "ok", "count": len(chats)}
 
 
+def _require_prompt(prompt: str, refs: list) -> None:
+    # Prompt kosong tanpa gambar acuan = muse menggambar acak dan kuota terbuang (mis. "/gambar" saja).
+    if not (prompt or "").strip() and not refs:
+        raise HTTPException(400, "prompt 为空")
+
+
 @app.post("/v1/images/tasks")
 def create_image_task(req: ImageRequest,
                       idempotency_key: str | None = Header(default=None), _=Depends(auth)):
     user_prompt = req.prompt
     preferred = _apply_memory(req)
     refs = _prepare_reference_images(_image_references(req))
+    _require_prompt(req.prompt, refs)
     return _queue_image(req, build_image_prompt(req, _reference_kinds(refs)), refs, idempotency_key,
                         preferred, user_prompt)
 
@@ -1588,7 +1601,7 @@ def get_image_task(task_id: str, _=Depends(auth)):
 async def images_generations(req: ImageRequest, _=Depends(auth)):
     ref_images = await asyncio.to_thread(
         _prepare_reference_images, _image_references(req))
-
+    _require_prompt(req.prompt, ref_images)
     prompt = build_image_prompt(req, _reference_kinds(ref_images))
     timeout = req.timeout or CFG.image_timeout
     if req.async_:
@@ -1711,7 +1724,7 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
     preferred = _apply_memory(req)
     ref_images = await asyncio.to_thread(
         _prepare_reference_images, _video_references(req))
-
+    _require_prompt(req.prompt, ref_images)
     prompt = build_video_prompt(req, _reference_kinds(ref_images))
     timeout = req.timeout or CFG.video_timeout
     task = store.create_task("video", req.prompt)
