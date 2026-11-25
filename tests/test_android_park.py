@@ -122,7 +122,37 @@ e.reset_thread(for_chat=True)
 assert p.pushed == 0 and p.navigated == 0
 print("ok: thread baru lewat router, cadangan reload")
 
-# 6. stop(): tab simpanan ikut ditutup.
+# 6. Penjaga: tab muse milik engine yang menjadi tab terpilih (urutan pertama /json/list) -> /chat diaktifkan lagi.
+import engine as engine_mod  # noqa: E402
+
+LIST = []
+engine_mod.http_json = lambda url, timeout=0: LIST
+e = engine()
+e._own_targets = {"muse1"}
+LIST[:] = [{"type": "page", "id": "muse1", "url": "https://muse.ai/thread/x"},
+           {"type": "page", "id": "ui1", "url": "http://127.0.0.1:18610/chat"},
+           {"type": "page", "id": "ui0", "url": "http://127.0.0.1:18610/chat"}]
+e._android_ui_guard_step()
+assert e.browser.sent[-1] == ("Target.activateTarget", {"targetId": "ui1"}), e.browser.sent
+e._ui_tab = "ui0"  # tab /chat terakhir yang terlihat lebih diutamakan
+e._android_ui_guard_step()
+assert e.browser.sent[-1] == ("Target.activateTarget", {"targetId": "ui0"}), e.browser.sent
+# Tab muse milik pengguna sendiri, atau /chat sudah di depan: tidak disentuh.
+for first in ({"type": "page", "id": "user-muse", "url": "https://muse.ai/"}, {"type": "page", "id": "ui1", "url": "http://127.0.0.1:18610/chat"}):
+    LIST[0] = first
+    n = len(e.browser.sent)
+    e._android_ui_guard_step()
+    assert len(e.browser.sent) == n, first
+# Tab ditutup engine: id dilepas dari daftar milik engine.
+e, p = engine(), Page()
+p.target_id = "muse9"
+e._own_targets.add("muse9")
+hold(e, p)
+e.close_current_page()
+assert "muse9" not in e._own_targets
+print("ok: penjaga mengembalikan /chat ke depan, tab muse pengguna tidak disentuh")
+
+# 7. stop(): tab simpanan ikut ditutup.
 e, p = engine(), Page()
 hold(e, p)
 e.close_current_page(park=True)

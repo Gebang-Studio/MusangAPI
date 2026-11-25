@@ -425,6 +425,9 @@ class MuseEngine:
         self.proxy_resolver = None
         self._last_http_renew: dict[str, float] = {}
         self._parked: dict | None = None  # Android: tab muse siap pakai, disimpan antar permintaan
+        self._ui_tab: str | None = None  # Android: tab /chat terakhir yang terlihat (lihat _android_front_ui_tab)
+        self._own_targets: set[str] = set()  # Android: id tab muse buatan engine (lihat _android_ui_guard)
+        self._guard_started = False
         self._log = None
         os.makedirs(cfg.profile_dir, exist_ok=True)
 
@@ -471,20 +474,44 @@ class MuseEngine:
             tabs = http_json(f"http://127.0.0.1:{self.cfg.cdp_port}/json/list", timeout=2) or []
         except Exception:
             return None
-        for t in tabs:
-            if t.get("type") != "page" or not re.match(r"https?://(127\.0\.0\.1|localhost)[:/]", t.get("url", "")):
-                continue
+        ui = [t["id"] for t in tabs if t.get("type") == "page"
+              and re.match(r"https?://(127\.0\.0\.1|localhost)[:/]", t.get("url", ""))]
+        for tid in ui:
             probe = None
             try:
-                probe = CDP(f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{t['id']}", timeout=3)
+                probe = CDP(f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{tid}", timeout=3)
                 if probe.js("document.visibilityState", timeout=3) == "visible":
-                    return t["id"]
+                    self._ui_tab = tid
+                    return tid
             except Exception:
                 pass
             finally:
                 if probe:
                     probe.close()
-        return None
+        return None  # Chrome di latar / tab lain tampil: _android_ui_guard yang mengembalikan /chat nanti
+
+    def _android_ui_guard_step(self):
+        """Tab muse milik engine tidak boleh tetap menjadi tab terpilih Chrome Android (/json/list = urutan tab yang
+        terakhir aktif). Saat Chrome di latar (pengguna di Termux) activateTarget tidak berpengaruh, jadi dicek tiap
+        detik: begitu Chrome dibuka lagi, /chat kembali ke depan dalam <=1 dtk alih-alih tab muse simpanan."""
+        if not (self._own_targets and self.browser):
+            return
+        pages = [t for t in http_json(f"http://127.0.0.1:{self.cfg.cdp_port}/json/list", timeout=2) or []
+                 if t.get("type") == "page"]
+        if not pages or pages[0].get("id") not in self._own_targets:
+            return
+        ui = [t["id"] for t in pages if re.match(r"https?://(127\.0\.0\.1|localhost)[:/]", t.get("url", ""))]
+        target = self._ui_tab if self._ui_tab in ui else (ui[0] if ui else None)
+        if target:
+            self.browser.send("Target.activateTarget", {"targetId": target})
+
+    def _android_ui_guard(self):
+        while True:
+            time.sleep(1.0)
+            try:
+                self._android_ui_guard_step()
+            except Exception:  # noqa: BLE001 - penjaga tidak boleh mati karena satu kegagalan
+                pass
 
     def _android_refocus(self, tab_id: str):
         """Chrome Android selalu memindahkan layar ke tab baru (background=True diabaikan), sekitar 0,2 dtk
@@ -627,6 +654,7 @@ class MuseEngine:
         p = self.page
         ctx_id = self.current_context_id
         if p:
+            self._own_targets.discard(getattr(p, "target_id", None))
             try:
                 p.close()
             except Exception:
@@ -687,10 +715,16 @@ class MuseEngine:
             target_id = t_res.get("result", {}).get("targetId")
             if not target_id:
                 raise MuseGenerationError("Chromium 未返回独立页面 ID")
+            if self.android:
+                self._own_targets.add(target_id)
+                if not self._guard_started:
+                    self._guard_started = True
+                    threading.Thread(target=self._android_ui_guard, daemon=True, name="android-ui-guard").start()
             if front:
                 self._android_refocus(front)
             ws_url = f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{target_id}"
             page = CDP(ws_url, timeout=180)
+            page.target_id = target_id
             page.send("Network.enable")
             page.send("Page.enable")
             page.send("Runtime.enable")
@@ -1078,6 +1112,7 @@ class MuseEngine:
     def _dispose_parked(self, parked: dict | None):
         if not parked:
             return
+        self._own_targets.discard(getattr(parked["page"], "target_id", None))
         try:
             parked["page"].close()
         except Exception:
