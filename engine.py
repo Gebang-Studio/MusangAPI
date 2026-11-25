@@ -370,6 +370,7 @@ class _NetReply:
     def __init__(self):
         self.mid, self.text, self.final, self.done = None, "", None, False
         self.session, self.files, self.base, self.tasks = None, [], "", {}
+        self.started: set = set()
 
     @property
     def running(self) -> bool:
@@ -379,6 +380,11 @@ class _NetReply:
     def feed(self, events: list) -> None:
         for e in events or []:
             ev, p = e.get("event"), e.get("payload") or {}
+            if (ev == "delta.message_done" and self.mid is None and p.get("transcript_surface") == "main_chat"
+                    and p.get("session_id") in self.started):
+                # Di HP muse kadang hanya mengirim message_done (tanpa start/append); transkripnya tetap lengkap.
+                # Hanya sesi yang mulai "running" di giliran ini (bukan thread lain yang sekadar "completed").
+                self.mid, self.session = p.get("message_id"), p.get("session_id")
             if ev == "delta.message_start" and self.mid is None and p.get("transcript_surface") == "main_chat":
                 self.mid, self.session = p.get("message_id"), p.get("session_id")
             elif (ev == "delta.message_start" and self.done and p.get("session_id") == self.session
@@ -388,6 +394,8 @@ class _NetReply:
                 self.mid, self.text, self.final, self.done = p.get("message_id"), self.base, None, False
             elif ev == "task.status" and p.get("session_id"):
                 self.tasks[p["session_id"]] = p.get("status")
+                if p.get("status") == "running":
+                    self.started.add(p["session_id"])
             elif ev == "delta.presentation" and p.get("kind") == "file" and self.session and p.get("session_id") == self.session:
                 # File buatan muse datang sebagai widget terpisah (message_id lain), bukan di transcript message_done.
                 f = (p.get("data") or {}).get("file") or {}
@@ -416,6 +424,10 @@ class MuseEngine:
         self._download_dirs: set[str] = set()
         self.proxy_resolver = None
         self._last_http_renew: dict[str, float] = {}
+        self._parked: dict | None = None  # Android: tab muse siap pakai, disimpan antar permintaan
+        self._ui_tab: str | None = None  # Android: tab /chat terakhir yang terlihat (lihat _android_front_ui_tab)
+        self._own_targets: set[str] = set()  # Android: id tab muse buatan engine (lihat _android_ui_guard)
+        self._guard_started = False
         self._log = None
         os.makedirs(cfg.profile_dir, exist_ok=True)
 
@@ -462,20 +474,44 @@ class MuseEngine:
             tabs = http_json(f"http://127.0.0.1:{self.cfg.cdp_port}/json/list", timeout=2) or []
         except Exception:
             return None
-        for t in tabs:
-            if t.get("type") != "page" or not re.match(r"https?://(127\.0\.0\.1|localhost)[:/]", t.get("url", "")):
-                continue
+        ui = [t["id"] for t in tabs if t.get("type") == "page"
+              and re.match(r"https?://(127\.0\.0\.1|localhost)[:/]", t.get("url", ""))]
+        for tid in ui:
             probe = None
             try:
-                probe = CDP(f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{t['id']}", timeout=3)
+                probe = CDP(f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{tid}", timeout=3)
                 if probe.js("document.visibilityState", timeout=3) == "visible":
-                    return t["id"]
+                    self._ui_tab = tid
+                    return tid
             except Exception:
                 pass
             finally:
                 if probe:
                     probe.close()
-        return None
+        return None  # Chrome di latar / tab lain tampil: _android_ui_guard yang mengembalikan /chat nanti
+
+    def _android_ui_guard_step(self):
+        """Tab muse milik engine tidak boleh tetap menjadi tab terpilih Chrome Android (/json/list = urutan tab yang
+        terakhir aktif). Saat Chrome di latar (pengguna di Termux) activateTarget tidak berpengaruh, jadi dicek tiap
+        detik: begitu Chrome dibuka lagi, /chat kembali ke depan dalam <=1 dtk alih-alih tab muse simpanan."""
+        if not (self._own_targets and self.browser):
+            return
+        pages = [t for t in http_json(f"http://127.0.0.1:{self.cfg.cdp_port}/json/list", timeout=2) or []
+                 if t.get("type") == "page"]
+        if not pages or pages[0].get("id") not in self._own_targets:
+            return
+        ui = [t["id"] for t in pages if re.match(r"https?://(127\.0\.0\.1|localhost)[:/]", t.get("url", ""))]
+        target = self._ui_tab if self._ui_tab in ui else (ui[0] if ui else None)
+        if target:
+            self.browser.send("Target.activateTarget", {"targetId": target})
+
+    def _android_ui_guard(self):
+        while True:
+            time.sleep(1.0)
+            try:
+                self._android_ui_guard_step()
+            except Exception:  # noqa: BLE001 - penjaga tidak boleh mati karena satu kegagalan
+                pass
 
     def _android_refocus(self, tab_id: str):
         """Chrome Android selalu memindahkan layar ke tab baru (background=True diabaikan), sekitar 0,2 dtk
@@ -566,6 +602,9 @@ class MuseEngine:
     def stop(self):
         with self._start_lock:
             self._close_page()
+            with self._contexts_lock:
+                parked, self._parked = self._parked, None
+            self._dispose_parked(parked)
             if self.browser:
                 with self._contexts_lock:
                     for ctx_id in list(self._active_contexts):
@@ -615,6 +654,7 @@ class MuseEngine:
         p = self.page
         ctx_id = self.current_context_id
         if p:
+            self._own_targets.discard(getattr(p, "target_id", None))
             try:
                 p.close()
             except Exception:
@@ -675,16 +715,24 @@ class MuseEngine:
             target_id = t_res.get("result", {}).get("targetId")
             if not target_id:
                 raise MuseGenerationError("Chromium 未返回独立页面 ID")
+            if self.android:
+                self._own_targets.add(target_id)
+                if not self._guard_started:
+                    self._guard_started = True
+                    threading.Thread(target=self._android_ui_guard, daemon=True, name="android-ui-guard").start()
             if front:
                 self._android_refocus(front)
             ws_url = f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{target_id}"
             page = CDP(ws_url, timeout=180)
+            page.target_id = target_id
             page.send("Network.enable")
             page.send("Page.enable")
             page.send("Runtime.enable")
             page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _DELTA_HOOK_JS})
             if self.android:
                 page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _ANDROID_BG_JS})
+                # Muse memutus WebSocket ~13 dtk setelah tab tersembunyi; tab simpanan (close_current_page park) harus tetap tersambung.
+                page.send("Emulation.setFocusEmulationEnabled", {"enabled": True})
             page.send("Browser.setDownloadBehavior", {
                 "behavior": "allow", "downloadPath": self._new_download_dir(),
                 "browserContextId": ctx_id,
@@ -912,12 +960,15 @@ class MuseEngine:
                     || document.querySelector('button[aria-label*="停止"]'));
                 var bodyTxt = document.body ? (document.body.innerText || '') : '';
                 var hasStuck = bodyTxt.indexOf('Still sending') !== -1 || bodyTxt.indexOf('Connecting...') !== -1;
-                if (hasStop || hasStuck || hasAtts) return true;
+                if (hasStop || hasStuck || hasAtts) return 'reload';
                 if (forChat) {
-                    return bubbleCount >= 24;
+                    // Riwayat sudah ada di prompt (transkrip): thread lama di tab simpanan hanya mengacaukan konteks.
+                    return bubbleCount > 0 ? 'new' : false;
                 }
                 return (window.location.pathname !== '/thread/new') || bubbleCount > 0;
             })(%s)""" % ("true" if for_chat else "false"))
+            if needs_nav == "new" and self._spa_new_thread():
+                return
             if needs_nav:
                 self.page.send("Page.navigate", {"url": "https://muse.ai/thread/new"})
                 t_end = time.time() + 10.0
@@ -933,6 +984,22 @@ class MuseEngine:
                 self._wait_ws_ready(self.page, timeout=12.0)
         except Exception:
             pass
+
+    def _spa_new_thread(self) -> bool:
+        """Thread baru lewat router Next.js muse (~1 dtk) tanpa memuat ulang halaman (~8-14 dtk di HP)."""
+        try:
+            if self.page.js("(function(){try{window.next.router.push('/thread/new');return true}catch(e){return false}})()") is not True:
+                return False
+            t_end = time.time() + 5.0
+            while time.time() < t_end:
+                if self.page.js("location.pathname === '/thread/new' && !!document.querySelector('textarea')"
+                                " && document.querySelectorAll('div[class*=\"hatch-chat-groupable-bubble\"]').length === 0"):
+                    return self._wait_ws_ready(self.page, timeout=5.0)
+                time.sleep(0.08)
+        except Exception:  # noqa: BLE001 - cadangan: muat ulang halaman
+            pass
+        log.info("thread baru lewat router gagal, memuat ulang halaman")
+        return False
 
     # Set by the app: persist cookies that muse.ai rotated during an engine-side renewal.
     cookie_sink = None
@@ -952,6 +1019,8 @@ class MuseEngine:
         # A lease snapshots routing; a concurrent config edit must never change its exit.
         proxy = copy.deepcopy(local.proxy_snapshot if hasattr(local, "proxy_snapshot")
                               else resolver(account_id) if resolver and account_id else None)
+        if self.page is None and not proxy:
+            self._adopt_parked(account_id)
         if (self.page is not None
                 and getattr(self._ensure_local(), "proxy_config", None) == proxy
                 and (account_id is None or getattr(self, "current_acc_id", None) == account_id)):
@@ -1015,9 +1084,61 @@ class MuseEngine:
                                 "请用浏览器扩展重新导入 cookie")
         raise MuseGenerationError("muse.ai 页面加载超时（未出现聊天输入框），请检查服务器网络后重试；未确认会话失效")
 
-    def close_current_page(self):
-        """显式释放当前线程所持有的页面和隔离上下文。"""
+    def close_current_page(self, park: bool = False):
+        """显式释放当前线程所持有的页面和隔离上下文。
+
+        park=True di Chrome Android: tab disimpan untuk permintaan berikutnya (akun sama) alih-alih ditutup.
+        Memuat muse di HP ~14 dtk; tab simpanan siap dalam ~1 dtk (thread baru lewat router, lihat reset_thread)."""
+        if park and self._park_current():
+            return
         self._close_page()
+
+    def _park_current(self) -> bool:
+        local = self._ensure_local()
+        page, acc = self.page, self.current_acc_id
+        # Tab berproxy memegang relay milik thread ini; tidak disimpan.
+        if not (self.android and page and acc) or getattr(local, "proxy_config", None) or getattr(local, "proxy_relay", None):
+            return False
+        with self._contexts_lock:
+            old, self._parked = self._parked, {"page": page, "ctx": self.current_context_id, "acc": acc,
+                                               "dl": getattr(local, "download_dir", None)}
+        self.page = None
+        self.current_context_id = None
+        self.current_acc_id = None
+        local.download_dir = None
+        self._dispose_parked(old)
+        return True
+
+    def _dispose_parked(self, parked: dict | None):
+        if not parked:
+            return
+        self._own_targets.discard(getattr(parked["page"], "target_id", None))
+        try:
+            parked["page"].close()
+        except Exception:
+            pass
+        if parked["ctx"] and self.browser:
+            try:
+                self.browser.send("Target.disposeBrowserContext", {"browserContextId": parked["ctx"]})
+            except Exception:
+                pass
+        with self._contexts_lock:
+            self._active_contexts.discard(parked["ctx"])
+            self._download_dirs.discard(parked["dl"])
+        if parked["dl"]:
+            shutil.rmtree(parked["dl"], ignore_errors=True)
+
+    def _adopt_parked(self, account_id: str | None):
+        """Pakai tab simpanan bila milik akun yang sama; milik akun lain ditutup (HP biasanya 1 akun)."""
+        with self._contexts_lock:
+            parked, self._parked = self._parked, None
+        if not parked:
+            return
+        if account_id is not None and parked["acc"] != account_id:
+            self._dispose_parked(parked)
+            return
+        self.page, self.current_context_id, self.current_acc_id = parked["page"], parked["ctx"], parked["acc"]
+        self._ensure_local().download_dir = parked["dl"]
 
     def refresh(self, cookies: dict, expires: dict | None = None, account_id: str | None = None):
         self._close_page()
@@ -1926,7 +2047,8 @@ function __md(root){
             cnt, cur, _ = self._poll_chat()
             if cur and not (cnt <= base_agent and cur == base_text):
                 dom_seen = dom_seen or time.time()
-                if time.time() - dom_seen > 2.0:
+                # Di HP event (atau message_done saja) bisa tiba beberapa detik setelah teks tampil di layar.
+                if time.time() - dom_seen > (6.0 if self.android else 2.0):
                     log.warning("chat: event delta.* tidak terlihat, kembali membaca DOM")
                     break
             elif time.time() - t_sent > 14.0:

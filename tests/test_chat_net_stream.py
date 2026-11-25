@@ -74,3 +74,22 @@ except MuseGenerationError:
     pass
 
 print("PASS: balasan dari event delta.* (markdown utuh, sesi lain diabaikan, final dari message_done)")
+
+# Di HP muse kadang hanya mengirim message_done (tanpa message_start/text_append): balasan tetap terbaca utuh,
+# tapi hanya untuk sesi yang mulai "running" di giliran ini.
+def status(sess, st):
+    return {"event": "task.status", "payload": {"session_id": sess, "status": st}}
+
+
+def done_main(mid, sess, text):
+    d = done(mid, text)
+    d["payload"].update(transcript_surface="main_chat", session_id=sess)
+    return d
+
+
+net = _NetReply()
+net.feed([status("lama", "completed"), done_main("m0", "lama", "sisa thread lain")])
+assert net.mid is None and not net.done, vars(net)
+net.feed([status("baru", "running"), done_main("m1", "baru", "chat")])
+assert net.mid == "m1" and net.done and net.final == "chat", vars(net)
+print("ok: message_done tanpa message_start diterima hanya untuk sesi baru")
