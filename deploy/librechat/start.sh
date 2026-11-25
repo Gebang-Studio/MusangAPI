@@ -22,18 +22,6 @@ KEY=$(sed -n 's/^MUSE2API_KEY=//p' "$ROOT_ENV" 2>/dev/null | tail -1)
 [ -n "$KEY" ] || die "MUSE2API_KEY tidak ditemukan di $ROOT_ENV. Jalankan GemuseAPI sekali dulu."
 BASE="${GEMUSE_BASE_URL:-http://host.docker.internal:18610/v1}"
 
-# Gambar/video dari model muse-image/muse-video dibuka oleh BROWSER, bukan container: butuh URL absolut yang
-# bisa dijangkau browser (host.docker.internal tidak bisa). Tanpa ini gambar di LibreChat tampil rusak.
-if ! grep -q '^MUSE2API_PUBLIC_BASE=.' "$ROOT_ENV"; then
-  # config.py memakai baris pertama: isi baris kosong yang ada, tambah baris hanya bila belum ada sama sekali.
-  if grep -q '^MUSE2API_PUBLIC_BASE=' "$ROOT_ENV"; then
-    sed -i.bak 's|^MUSE2API_PUBLIC_BASE=$|MUSE2API_PUBLIC_BASE=http://127.0.0.1:18610|' "$ROOT_ENV" && rm -f "$ROOT_ENV.bak"
-  else
-    printf 'MUSE2API_PUBLIC_BASE=http://127.0.0.1:18610\n' >>"$ROOT_ENV"
-  fi
-  say "MUSE2API_PUBLIC_BASE=http://127.0.0.1:18610 ditambahkan ke .env GemuseAPI. Restart GemuseAPI sekali supaya berlaku."
-fi
-
 hex() { openssl rand -hex "$1"; }
 if [ ! -f .env ]; then
   say "Membuat deploy/librechat/.env (rahasia acak, hanya untuk komputer ini)…"

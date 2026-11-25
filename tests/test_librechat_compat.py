@@ -43,7 +43,9 @@ import asyncio  # noqa: E402
 import json  # noqa: E402
 from unittest.mock import patch  # noqa: E402
 
-PNG = b"\x89PNG\r\n\x1a\n"
+PNG = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000")  # cukup untuk data URI
+os.makedirs(app.CFG.media_dir, exist_ok=True)
+open(os.path.join(app.CFG.media_dir, "uji.png"), "wb").write(PNG)
 calls = []
 
 
@@ -79,17 +81,16 @@ msgs = [{"role": "user", "content": "halo"}, {"role": "assistant", "content": "h
 with patch.object(app, "_run_generation", fake_run), patch.object(app, "_public_base", lambda: ""):
     st, body = asyncio.run(call({"model": "muse-image", "messages": msgs}))
     content = json.loads(body)["choices"][0]["message"]["content"]
-    # data: URI dibuang react-markdown (LibreChat), jadi selalu URL http; tanpa public_base = alamat yang dipanggil klien.
-    assert st == 200 and content == "![kucing oranye di atap](http://t/v1/media/uji.png)", (st, content[:120])
+    assert st == 200 and content.startswith("![kucing oranye di atap](data:image/png;base64,"), (st, content[:120])
     assert calls[-1][1] == "image" and "kucing oranye di atap" in calls[-1][0] and "halo" not in calls[-1][0], calls[-1]
     st, body = asyncio.run(call({"model": "muse-image", "stream": True, "messages": msgs}))
-    assert st == 200 and "(http://t/v1/media/uji.png)" in body and body.rstrip().endswith("data: [DONE]"), body[-200:]
+    assert st == 200 and "data:image/png;base64," in body and body.rstrip().endswith("data: [DONE]"), body[-200:]
     st, body = asyncio.run(call({"model": "muse-image", "messages": [{"role": "user", "content": "  "}]}))
     assert st == 400, (st, body)  # prompt kosong tanpa acuan: kuota tidak dipakai
     st, body = asyncio.run(call({"model": "muse-video", "messages": msgs}))
-    assert json.loads(body)["choices"][0]["message"]["content"] == "[Video: kucing oranye di atap](http://t/v1/media/uji.mp4)", body
+    assert st == 200 and "MUSE2API_PUBLIC_BASE" in json.loads(body)["choices"][0]["message"]["content"], body
 with patch.object(app, "_run_generation", fake_run), patch.object(app, "_public_base", lambda: "http://127.0.0.1:18610"):
     st, body = asyncio.run(call({"model": "muse-video", "messages": msgs}))
     assert "(http://127.0.0.1:18610/v1/media/uji.mp4)" in json.loads(body)["choices"][0]["message"]["content"], body
-print("ok: muse-image/muse-video lewat chat completions (URL http, stream, prompt kosong, public_base)")
+print("ok: muse-image/muse-video lewat chat completions (markdown, stream, prompt kosong, public_base)")
 print("test_librechat_compat OK")
