@@ -29,7 +29,6 @@ import asyncio
 import copy
 from contextlib import contextmanager
 import base64
-import mimetypes
 import collections
 import binascii
 import io
@@ -1868,77 +1867,6 @@ _SSE_HEADERS = {
 }
 
 
-# Klien chat biasa (LibreChat, dsb.) hanya punya pemilih model: muse-image/muse-video di chat completions membuat
-# media dari pesan user terakhir dan menjawab dengan markdown yang langsung tampil.
-_CHAT_MEDIA_KINDS = {"muse-image": "image", "muse-video": "video"}
-
-
-def _chat_media_markdown(res: dict, prompt: str) -> str:
-    name, kind = res["filename"], res["kind"]
-    label = re.sub(r"[\[\]()\n]+", " ", prompt).strip()[:80] or kind
-    if _public_base():
-        url = media_url(name)
-    elif kind == "image":
-        # URL relatif akan dibaca browser sebagai alamat klien (404), jadi tanpa public_base gambar dikirim utuh.
-        path = res.get("path") or os.path.join(CFG.media_dir, name)
-        mime = mimetypes.guess_type(name)[0] or "image/png"
-        with open(path, "rb") as f:
-            url = f"data:{mime};base64," + base64.b64encode(f.read()).decode()
-    else:
-        return (f"Video selesai dan tersimpan di Media library GemuseAPI (`{name}`). Setel MUSE2API_PUBLIC_BASE "
-                "(mis. http://127.0.0.1:18610) supaya tautan videonya bisa dibuka dari aplikasi chat ini.")
-    return f"![{label}]({url})" if kind == "image" else f"[Video: {label}]({url})"
-
-
-async def _chat_media(req: "ChatRequest", model: str, refs: list[str] | None):
-    kind = _CHAT_MEDIA_KINDS[model]
-    user = next((m for m in reversed(req.messages) if (m.role or "").lower() == "user"), None)
-    text = _content_text(user.content).strip() if user else (req.prompt or "").strip()
-    refs = refs or []
-    _require_prompt(text, refs)
-    kinds = _reference_kinds(refs)
-    if kind == "image":
-        prompt, timeout = build_image_prompt(ImageRequest(prompt=text), kinds), CFG.image_timeout
-    else:
-        prompt, timeout = build_video_prompt(VideoRequest(prompt=text), kinds), CFG.video_timeout
-    cid, created = "chatcmpl-" + uuid.uuid4().hex[:24], int(time.time())
-
-    def run() -> str:
-        res, _acc = _run_generation(prompt, kind, timeout, reference_images=refs)
-        return _chat_media_markdown(res, text)
-
-    if not req.stream:
-        try:
-            content = await asyncio.to_thread(run)
-        except MuseAuthError as exc:
-            raise HTTPException(401, str(exc)) from exc
-        except MuseGenerationError as exc:
-            raise HTTPException(502, str(exc)) from exc
-        return {"id": cid, "object": "chat.completion", "created": created, "model": model,
-                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
-
-    async def stream():
-        yield _sse(_chat_chunk(cid, created, model, {"role": "assistant"}))
-        # Media butuh puluhan detik sampai menit; komentar SSE menjaga koneksi tetap hidup.
-        # shortcut: klien yang putus tidak membatalkan pembuatan; hasilnya tetap masuk Media library.
-        job = asyncio.ensure_future(asyncio.to_thread(run))
-        while not job.done():
-            done, _ = await asyncio.wait({job}, timeout=15)
-            if not done:
-                yield ": muse masih membuat media\n\n"
-        try:
-            content = job.result()
-        except (MuseAuthError, MuseGenerationError) as exc:
-            yield _sse({"error": {"message": str(exc), "type": "server_error",
-                                  "code": 401 if isinstance(exc, MuseAuthError) else 502}})
-            return
-        yield _sse(_chat_chunk(cid, created, model, {"content": content}))
-        yield _sse(_chat_chunk(cid, created, model, {}, finish="stop"))
-        yield "data: [DONE]\n\n"
-    return StreamingResponse(stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
-
-
 @app.post("/v1/chat/completions")
 async def chat_completions(req: ChatRequest, _=Depends(auth)):
     """OpenAI 兼容的对话接口 —— 各类智能体客户端都能接。
@@ -1967,8 +1895,6 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
     model = resolve_model(req.model, default="muse-spark")
     timeout = int(req.timeout or CFG.chat_timeout)
     images = await _chat_images(req.messages)
-    if model in _CHAT_MEDIA_KINDS:
-        return await _chat_media(req, model, images)
     acc = store.pick_account(rotate=True)
     if not acc:
         raise HTTPException(400, "没有可用账号，请先在管理页面导入 cookie")

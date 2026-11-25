@@ -10,9 +10,8 @@ endpoints:
       apiKey: "${GEMUSE_API_KEY}"
       baseURL: "${GEMUSE_BASE_URL}"
       models:
-        # muse-spark = chat. muse-image / muse-video = pesan terakhir Anda dijadikan gambar / video (memakai kuota
-        # media akun muse); gambar tampil langsung, video butuh MUSE2API_PUBLIC_BASE di .env GemuseAPI.
-        default: ["muse-spark", "muse-image", "muse-video"]
+        default: ["muse-spark"]
+        # true akan ikut menampilkan muse-image/muse-video sebagai model chat, padahal keduanya bukan model chat.
         fetch: false
       # Judul otomatis memakai 1 panggilan chat muse tambahan per percakapan (~20 dtk dan antre di akun yang sama).
       titleConvo: false
