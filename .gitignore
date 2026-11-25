@@ -73,4 +73,3 @@ data/conversations.json
 data/video-blocked.json
 .ds-receipts/
 data/termux-server.*
-deploy/librechat/data/

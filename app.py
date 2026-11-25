@@ -600,9 +600,6 @@ class ImageRequest(BaseModel):
     size: str | None = None
     aspect_ratio: str | None = None
     response_format: str = "url"      # url | b64_json
-    # Parameter khusus gpt-image (tool gambar LibreChat). Model itu selalu menjawab b64_json dan klien semacam
-    # LibreChat hanya membaca data[0].b64_json, jadi tanpa response_format eksplisit jawab b64_json.
-    output_format: str | None = None
     timeout: int | None = Field(default=None, ge=1, le=600)
     extra: str | None = None
     image: Any = None
@@ -613,10 +610,6 @@ class ImageRequest(BaseModel):
     reference_image: str | None = None
     async_: bool = Field(False, alias="async")
     conversation_id: str | None = None
-
-    def model_post_init(self, _context):
-        if self.output_format and "response_format" not in self.model_fields_set:
-            self.response_format = "b64_json"
 
 
 class VideoRequest(BaseModel):
