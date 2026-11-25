@@ -73,19 +73,23 @@ def hold(e, page, acc="a1", ctx="ctx1"):
 e, p = engine(), Page()
 hold(e, p)
 e.close_current_page(park=True)
-assert not p.closed and e.page is None and e._parked["page"] is p
-assert e.ensure_page({}, account_id="a1") is p and e.current_acc_id == "a1" and e._parked is None
+assert not p.closed and e.page is None and e._parked["a1"]["page"] is p
+assert e.ensure_page({}, account_id="a1") is p and e.current_acc_id == "a1" and e._parked == {}
 assert not any(m == "Target.createTarget" for m, _ in e.browser.sent), e.browser.sent
 print("ok: tab simpanan dipakai lagi oleh akun yang sama")
 
-# 2. Akun lain: tab simpanan ditutup beserta konteksnya.
-e, p = engine(), Page()
-hold(e, p)
+# 2. Dua akun (intent dan jawaban di akun berbeda): masing-masing punya tab simpanan, tidak saling menutup.
+e, p1, p2 = engine(), Page(), Page()
+hold(e, p1, acc="a1", ctx="c1")
 e.close_current_page(park=True)
+hold(e, p2, acc="a2", ctx="c2")
+e.close_current_page(park=True)
+assert not p1.closed and not p2.closed and set(e._parked) == {"a1", "a2"}
+e._adopt_parked("a3")
+assert e.page is None and set(e._parked) == {"a1", "a2"}
 e._adopt_parked("a2")
-assert p.closed and e.page is None and ("Target.disposeBrowserContext", {"browserContextId": "ctx1"}) in e.browser.sent
-assert "ctx1" not in e._active_contexts
-print("ok: tab milik akun lain ditutup")
+assert e.page is p2 and set(e._parked) == {"a1"}
+print("ok: satu tab simpanan per akun")
 
 # 3. Bukan Android / tanpa park / tab berproxy: tetap ditutup seperti dulu.
 for android, park, proxy in ((False, True, None), (True, False, None), (True, True, {"server": "x"})):
@@ -93,17 +97,18 @@ for android, park, proxy in ((False, True, None), (True, False, None), (True, Tr
     hold(e, p)
     e._ensure_local().proxy_config = proxy
     e.close_current_page(park=park)
-    assert p.closed and e._parked is None, (android, park, proxy)
+    assert p.closed and e._parked == {}, (android, park, proxy)
 print("ok: Mac, kegagalan/dihentikan, dan tab berproxy tetap ditutup")
 
-# 4. Menyimpan tab kedua menutup tab simpanan sebelumnya (hanya satu tab muse tersimpan di HP).
+# 4. Akun yang sama menyimpan tab lagi: tab lamanya ditutup beserta konteksnya.
 e, p1, p2 = engine(), Page(), Page()
 hold(e, p1, ctx="c1")
 e.close_current_page(park=True)
 hold(e, p2, ctx="c2")
 e.close_current_page(park=True)
-assert p1.closed and not p2.closed and e._parked["page"] is p2
-print("ok: satu tab simpanan")
+assert p1.closed and not p2.closed and e._parked["a1"]["page"] is p2
+assert ("Target.disposeBrowserContext", {"browserContextId": "c1"}) in e.browser.sent and "c1" not in e._active_contexts
+print("ok: tab lama akun yang sama ditutup")
 
 # 5. Chat di tab yang sudah berisi thread lama: thread baru lewat router, tanpa memuat ulang halaman.
 e, p = engine(), Page(bubbles=4)
@@ -157,5 +162,5 @@ e, p = engine(), Page()
 hold(e, p)
 e.close_current_page(park=True)
 e.stop()
-assert p.closed and e._parked is None
+assert p.closed and e._parked == {}
 print("test_android_park OK")
