@@ -62,3 +62,19 @@ for q in ("deskripsikan gambar ini", "jelaskan foto ini", "baca teks di gambar i
           "describe this image", "这张图片里是什么", "tebak ini foto di kota mana"):
     assert classify(q, attachments=1)["kind"] == "chat", q
 print(f"PASS: router {acc:.0%} ({len(CASES) - len(wrong)}/{len(CASES)}), spesifikasi media terbaca")
+
+# Jalur cepat /v1/intent: pertanyaan biasa tanpa tanda media tidak perlu bertanya ke AI muse.
+from intent import obvious_chat  # noqa: E402
+for q in ("Apa ibu kota Jepang? Jawab satu kalimat.", "Jelaskan cara kerja internet", "kenapa langit biru?",
+          "Apa itu fotosintesis?", "Berapa 17 x 23?", "how does TCP work?", "jelaskan cara membuat kue bolu",
+          "halo", "Terima kasih banyak", "tuliskan puisi tentang laut", "tolong perbaiki kode python ini: print(x"):
+    assert obvious_chat(q), q
+for q, last, att in (("Apa kamu bisa gambar kucing?", None, 0), ("bisakah kamu buatkan video pantai?", None, 0),
+                     ("apa isi gambar ini?", None, 1), ("apa yang terjadi selanjutnya? lanjutkan", "video", 0),
+                     ("kucing oranye tidur di sofa", None, 0), ("/chat apa kabar?", None, 0),
+                     ("tuliskan puisi lalu buatkan gambarnya", None, 0), ("halo, bikin logo kopi", None, 0),
+                     ("1. kucing\n2. anjing", None, 0),
+                     ("Bagaimana kalau versi anime?", None, 0), ("berapa lama video 10 detik?", None, 0),
+                     ("apa ini? " + "x" * 400, None, 0), ("", None, 0)):
+    assert not obvious_chat(q, last, att), q
+print("PASS: pertanyaan/sapaan/tugas teks melewati AI intent, yang bertanda media tetap ke AI")

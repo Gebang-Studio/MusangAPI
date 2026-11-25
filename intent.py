@@ -47,6 +47,13 @@ _CONTINUE = _W([r"lanjut", r"lanjutkan", r"lanjutannya", r"sambung", r"sambungka
                 r"continue", r"continuation", r"next scene", r"adegan berikutnya", r"scene berikutnya",
                 r"part 2", r"bagian (?:2|dua|berikutnya)", r"yang sama", r"same (?:character|car|scene|person|style)",
                 r"seperti tadi", r"yang tadi", r"sebelumnya", r"previous (?:scene|video|image)"])
+# Sapaan dan tugas teks: tanpa kata media, ini pasti chat (lihat obvious_chat).
+_TEXT_TASK = _W([r"halo", r"hai", r"hi", r"hello", r"hey", r"pagi", r"siang", r"sore", r"malam", r"terima kasih",
+                 r"makasih", r"thanks", r"thank you", r"ok(?:e|ay)?", r"sip", r"tulis", r"tuliskan", r"puisi", r"pantun",
+                 r"cerita", r"cerpen", r"esai", r"artikel", r"surat", r"email", r"caption", r"kode", r"code", r"script",
+                 r"skrip", r"fungsi", r"function", r"program", r"terjemah", r"ringkas", r"rangkum", r"resep", r"saran",
+                 r"rekomendasi", r"contoh", r"hitung", r"koreksi", r"perbaiki", r"write", r"poem", r"story", r"essay",
+                 r"summary", r"recipe", r"fix", r"debug"])
 _CONTINUE_CJK = re.compile(r"继续|接着|同一个|刚才")
 
 _DURATION = re.compile(r"(\d{1,3}(?:[.,]\d)?)\s*(?:-\s*)?(?:s|sec|secs|second|seconds|detik|dtk|秒)(?![a-z])", re.I)
@@ -99,6 +106,21 @@ def split_items(text: str) -> tuple[str, list[dict]]:
 
 def is_continuation(text: str) -> bool:
     return bool(_CONTINUE.search(text or "") or _CONTINUE_CJK.search(text or ""))
+
+
+def obvious_chat(text: str, last_kind: str | None = None, attachments: int = 0) -> bool:
+    """Pertanyaan, sapaan, atau tugas teks tanpa tanda media sama sekali: pasti chat, /v1/intent tidak bertanya ke AI muse.
+
+    Menghemat 1 panggilan muse per pesan; di HP (1 akun) AI intent menahan jawaban ~10 dtk lebih lama.
+    Yang menyebut gambar/video/buat/gaya/durasi, lanjutan media, lampiran, atau teks panjang tetap ke AI."""
+    t = (text or "").strip()
+    if attachments or not t or len(t) > 300 or _OVERRIDE_RE.match(t):
+        return False
+    r = classify(t, last_kind)
+    if r["items"] or not (r["reason"] == "pertanyaan" or (r["reason"] == "percakapan" and _TEXT_TASK.search(t))):
+        return False  # "percakapan" lain bisa berupa prompt gambar tanpa kata kunci ("kucing tidur di sofa")
+    hints = (_VIDEO_NOUN, _VIDEO_CJK, _IMAGE_NOUN, _IMAGE_CJK, _VERB, _VERB_CJK, _MOTION, _STYLE, _DURATION, _RATIO, _RES)
+    return not any(rx.search(t) for rx in hints) and not (is_continuation(t) and last_kind in ("image", "video"))
 
 
 def classify(text: str, last_kind: str | None = None, attachments: int = 0) -> dict:

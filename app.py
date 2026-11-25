@@ -56,7 +56,7 @@ from engine import (ESSENTIAL_COOKIES, MAX_REFERENCE_IMAGE_BYTES,
 from engine import MuseProxyError, MuseSessionUnavailable
 from store import Store, account_expiry, min_expiry
 from generation_timing import QueuePolicy, QueueSettings, TaskTiming
-from intent import ai_kind, ai_prompt, classify, is_continuation, parse_media_spec
+from intent import ai_kind, ai_prompt, classify, is_continuation, parse_media_spec, obvious_chat
 from memory import ConversationMemory
 from proxy import normalize_server, request_proxy_context, split_proxy_url
 from thumbnails import (VIDEO_FORMATS, ThumbnailUnavailable, clear_thumbnail,
@@ -567,7 +567,8 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
             try:
                 if leased_id:
                     ACCOUNT_POOL.release(leased_id)
-                engine.close_current_page()
+                # Android: tab yang selesai normal disimpan (memuat muse di HP ~14 dtk); yang dihentikan/gagal ditutup.
+                engine.close_current_page(park=not stop_event.is_set() and last_exc is None)
             except Exception as exc:
                 log.warning("对话清理失败: %s", type(exc).__name__)
             finally:
@@ -1546,6 +1547,9 @@ def intent(req: IntentRequest, _=Depends(auth)):
     out = classify(req.text, req.last_kind, req.attachments)
     if out["reason"].startswith(("perintah /", "daftar ")):
         return out  # /video, /gambar, /chat, atau "buatkan semua" + daftar: pilihan eksplisit pengguna
+    if obvious_chat(req.text, req.last_kind, req.attachments):
+        log.info("intent chat/pertanyaan tanpa AI: %r", (req.text or "")[:80])
+        return out
     try:
         kind = ai_kind(_ask_muse(ai_prompt(req.text, req.history, req.attachments)))
     except Exception as exc:  # noqa: BLE001 - router tidak boleh menggagalkan pesan
@@ -2919,7 +2923,7 @@ def _warmup_browser_sync():
         return
     if not GEN_LOCK.acquire(blocking=False):
         return
-    acc = None
+    acc, warm = None, False
     try:
         acc = ACCOUNT_POOL.acquire(rotate=False, timeout=0.1, record_use=False)
         log.info("【浏览器预热】正在后台预热账号 %s (%s) 的热备标签页...", acc.get("label"), acc["id"])
@@ -2927,12 +2931,13 @@ def _warmup_browser_sync():
         refreshed = _renew_and_persist(acc["id"], wake_vm=True, force=False) or acc
         engine.start()
         engine.ensure_page(refreshed["cookies"], refreshed.get("cookies_exp"), account_id=acc["id"])
+        warm = True
         log.info("【浏览器预热】账号 %s (%s) 热备标签页与 WebSocket 已就绪", acc.get("label"), acc["id"])
     except Exception as exc:  # noqa: BLE001
         log.warning("【浏览器预热】预热异常: %s", exc)
     finally:
-        # Warmup runs in a worker thread; do not retain its account reservation or page.
-        engine.close_current_page()
+        # Warmup runs in a worker thread; do not retain its account reservation or page (Android: simpan tabnya).
+        engine.close_current_page(park=warm)
         _clear_account_proxy()
         if acc:
             ACCOUNT_POOL.release(acc["id"])
