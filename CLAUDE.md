@@ -59,6 +59,14 @@ Isi `data/`: `accounts.json` (cookie, rahasia), `tasks.json`, `chats.json` (riwa
 - **Media**: durasi hanya disuntik kalau pengguna menyebut angka. Durasi sampai 30 detik terbukti jalan. Muse mengirim video 1280x720 walaupun diminta 1080p.
 - **Sinkron `/v1/chats`**: PUT mengganti seluruh daftar, jadi klien harus GET dan merge dulu (dua tab). `chats.json` yang rusak dipindah ke `chats.json.corrupt-<ts>` dan tidak boleh ditimpa.
 
+## Android (Termux) (per 2026-11-25)
+
+- **Termux** (`deploy/termux/`): server mengendalikan Chrome HP lewat `adb forward tcp:9333 localabstract:chrome_devtools_remote`; `engine.start()` memakai ulang CDP itu dan men-set `engine.android` dari `Android-Package` di `/json/version`. Socket DevTools hanya ada kalau Chrome dibuka **setelah** debugging aktif.
+- Tab Chrome Android di latar belakang **tidak pernah di-render**: `_ANDROID_BG_JS` mengganti `requestAnimationFrame` (tanpanya hydration muse macet di "server") dan `IntersectionObserver` (tanpanya gambar muse tertahan di skeleton). Tab CDP baru selalu dipindah ke depan (`background:true` diabaikan), jadi `_android_refocus` mengembalikan tab `/chat`.
+- Chrome Android menolak WebSocket CDP yang membawa header Origin: `cdp.py` memakai `suppress_origin=True`.
+- Di HP biasanya hanya 1 akun: intent dan jawaban antre (~45 dtk per pesan). Klien yang memutus stream harus menghentikan muse (`client_gone` di `chat_completions`), kalau tidak satu-satunya akun tertahan.
+- Belum beres: file buatan muse tidak bisa diambil di Android (tombol More actions = dialog sentuh, bukan menu). Catatan percobaan: `PLAN-uji-hp.md`.
+
 ## Masalah terbuka (per 2026-11-24)
 
 - **Kata pertama lebih lambat sekitar 3 detik, dan 2/20 intent lewat 60 detik**, sejak fitur file (`0aafcd4`). Dugaan yang belum terbukti: penahanan di `engine._net_reply` setelah `message_done` (0,3 detik, plus sampai 180 detik selama task muse masih `running`) juga terkena `_ask_muse`. Langkah selanjutnya: catat lama penahanan di log, lalu kalau terbukti, lewati penahanan itu untuk intent.

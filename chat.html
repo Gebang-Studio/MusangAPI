@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <title>GemuseAPI · Chat</title>
 <link rel="stylesheet" href="theme.css">
 <style>
@@ -463,6 +463,8 @@ function renderList(){
 
 function render(){
   renderList();
+  // Chrome Android sering memuat ulang tab di latar belakang; reload harus kembali ke percakapan yang sama, bukan layar kosong.
+  try { sessionStorage.setItem('muse2api_cur', cur ? cur.id : ''); } catch {}
   $('title').textContent = cur ? cur.title : 'Percakapan baru';
   const log = $('log');
   if (!cur || !cur.messages.length){
@@ -975,6 +977,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSide();
 chats.forEach(c => c.messages.forEach(m => { if (m.pending && m.task && m.kind){ resumeTask(c, m); return; } if (m.pending && m.batch_of) return; if (m.pending){ m.pending = false; if (!m.content && !m.url) m.error = 'Terputus sebelum selesai.'; } }));
 // Pesan user tanpa jawaban (tab ditutup saat /v1/intent) -> tampilkan "Coba lagi" alih-alih diam.
 chats.forEach(c => { const l = c.messages[c.messages.length - 1]; if (l && l.role === 'user') c.messages.push({role: 'assistant', content: '', ts: Date.now(), error: 'Terputus sebelum selesai.'}); });
+cur = chats.find(c => c.id === (() => { try { return sessionStorage.getItem('muse2api_cur'); } catch { return null; } })()) || null;
 setBusy(false); render(); loadModels(); pullChats(true); route();
 chats.forEach(pump);  // item batch yang belum terkirim saat tab ditutup
 if ($('adminView').hidden) $('input').focus();

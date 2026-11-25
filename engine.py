@@ -328,6 +328,20 @@ def _stream_safe(text: str) -> str:
 
 # Balasan muse datang lewat WebSocket terenkripsi (Noise), jadi CDP Network hanya melihat ciphertext.
 # Setelah didekripsi, halaman mem-parse event ndjson dengan JSON.parse: di sinilah markdown mentah bisa dibaca.
+# Tab Chrome Android di latar belakang tidak pernah di-render, padahal dua API hanya jalan saat render:
+# - requestAnimationFrame: hydration React muse macet di "server";
+# - IntersectionObserver: gambar hasil muse tertahan di skeleton "loading-state" selamanya.
+# Keduanya diganti versi tanpa render, hanya untuk Chrome Android (engine.android).
+_ANDROID_BG_JS = """(function(){
+window.requestAnimationFrame=function(cb){return setTimeout(function(){cb(performance.now())},16)};
+window.cancelAnimationFrame=function(id){clearTimeout(id)};
+if(!window.IntersectionObserver)return;
+window.IntersectionObserver=function(cb){var ts=new Set(),self={root:null,rootMargin:'0px',thresholds:[0],
+ observe:function(t){ts.add(t);setTimeout(function(){if(!ts.has(t))return;var r=t.getBoundingClientRect();
+  cb([{target:t,isIntersecting:true,intersectionRatio:1,boundingClientRect:r,intersectionRect:r,rootBounds:null,time:performance.now()}],self)},0)},
+ unobserve:function(t){ts.delete(t)},disconnect:function(){ts.clear()},takeRecords:function(){return[]}};return self};
+})();"""
+
 _DELTA_HOOK_JS = """(function(){
   if (window.__museEvt) return; window.__museEvt = [];
   var jp = JSON.parse;
@@ -393,6 +407,7 @@ class MuseEngine:
         self.cfg = cfg
         self.proc: subprocess.Popen | None = None
         self.browser: CDP | None = None
+        self.android = False  # True kalau CDP yang dipakai ulang adalah Chrome Android (adb forward)
         self._local = threading.local()
         self._start_lock = threading.Lock()
         self._active_contexts: set[str] = set()
@@ -439,6 +454,49 @@ class MuseEngine:
     def _debug_url(self):
         return f"http://127.0.0.1:{self.cfg.cdp_port}/json/version"
 
+    def _android_front_ui_tab(self) -> str | None:
+        """Tab UI GemuseAPI (localhost) yang sedang tampil di Chrome Android, untuk dikembalikan ke depan.
+        shortcut: hanya tab di 127.0.0.1/localhost yang diperiksa; tab situs lain tetap tertutup tab muse.
+        Kalau perlu semua tab, periksa visibilityState tiap tab (mahal dan bisa memuat ulang tab yang dibuang)."""
+        try:
+            tabs = http_json(f"http://127.0.0.1:{self.cfg.cdp_port}/json/list", timeout=2) or []
+        except Exception:
+            return None
+        for t in tabs:
+            if t.get("type") != "page" or not re.match(r"https?://(127\.0\.0\.1|localhost)[:/]", t.get("url", "")):
+                continue
+            probe = None
+            try:
+                probe = CDP(f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{t['id']}", timeout=3)
+                if probe.js("document.visibilityState", timeout=3) == "visible":
+                    return t["id"]
+            except Exception:
+                pass
+            finally:
+                if probe:
+                    probe.close()
+        return None
+
+    def _android_refocus(self, tab_id: str):
+        """Chrome Android selalu memindahkan layar ke tab baru (background=True diabaikan), sekitar 0,2 dtk
+        SETELAH createTarget kembali. activateTarget sebelum itu tertimpa, jadi tunggu tabnya tersembunyi dulu."""
+        probe = None
+        try:
+            probe = CDP(f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{tab_id}", timeout=3)
+            deadline = time.time() + 2
+            while time.time() < deadline and probe.js("document.visibilityState", timeout=2) == "visible":
+                time.sleep(0.05)
+            for _ in range(5):
+                self.browser.send("Target.activateTarget", {"targetId": tab_id})
+                time.sleep(0.3)
+                if probe.js("document.visibilityState", timeout=2) == "visible":
+                    return
+        except Exception as e:
+            log.warning("Gagal mengembalikan tab UI ke depan di Chrome Android: %s", e)
+        finally:
+            if probe:
+                probe.close()
+
     def start(self):
         with self._start_lock:
             if self.proc and self.proc.poll() is None and self.browser:
@@ -464,6 +522,7 @@ class MuseEngine:
                     v = http_json(self._debug_url(), timeout=1)
                     if v and "webSocketDebuggerUrl" in v:
                         self.browser = CDP(v["webSocketDebuggerUrl"], timeout=180)
+                        self.android = "Android-Package" in v
                         return
                 except Exception:
                     pass
@@ -492,6 +551,17 @@ class MuseEngine:
                     last = exc
                     time.sleep(1)
             raise MuseGenerationError(f"Chromium 启动失败: {last}")
+
+    def browser_alive(self) -> bool:
+        """Chrome yang dijalankan sendiri masih hidup, atau Chrome yang dipakai ulang (tanpa proc) masih menjawab CDP."""
+        if self.proc:
+            return self.proc.poll() is None
+        if not self.browser:
+            return False
+        try:
+            return "webSocketDebuggerUrl" in (http_json(self._debug_url(), timeout=1) or {})
+        except Exception:
+            return False
 
     def stop(self):
         with self._start_lock:
@@ -598,18 +668,23 @@ class MuseEngine:
             self.current_context_id = ctx_id
             with self._contexts_lock:
                 self._active_contexts.add(ctx_id)
+            front = self._android_front_ui_tab() if self.android else None
             t_res = self.browser.send("Target.createTarget", {
                 "url": "about:blank", "browserContextId": ctx_id,
             })
             target_id = t_res.get("result", {}).get("targetId")
             if not target_id:
                 raise MuseGenerationError("Chromium 未返回独立页面 ID")
+            if front:
+                self._android_refocus(front)
             ws_url = f"ws://127.0.0.1:{self.cfg.cdp_port}/devtools/page/{target_id}"
             page = CDP(ws_url, timeout=180)
             page.send("Network.enable")
             page.send("Page.enable")
             page.send("Runtime.enable")
             page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _DELTA_HOOK_JS})
+            if self.android:
+                page.send("Page.addScriptToEvaluateOnNewDocument", {"source": _ANDROID_BG_JS})
             page.send("Browser.setDownloadBehavior", {
                 "behavior": "allow", "downloadPath": self._new_download_dir(),
                 "browserContextId": ctx_id,

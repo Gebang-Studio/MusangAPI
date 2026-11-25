@@ -476,11 +476,14 @@ def _renew_and_persist(acc_id: str, wake_vm: bool = True, force: bool = False) -
 
 
 def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
-                     timeout: int, account_id: str | None, images: list[str] | None = None):
-    """Acquire a generation slot before the account lease; release both after cleanup."""
+                     timeout: int, account_id: str | None, images: list[str] | None = None,
+                     stop_event: threading.Event | None = None):
+    """Acquire a generation slot before the account lease; release both after cleanup.
+
+    stop_event dari pemanggil: di-set saat klien memutus stream, supaya muse berhenti walau belum ada kata."""
     import queue
     q = queue.Queue(maxsize=100)
-    stop_event = threading.Event()
+    stop_event = stop_event or threading.Event()
 
     def worker():
         cur_id = account_id
@@ -1411,7 +1414,7 @@ def readyz():
     accs = [a for a in store.list_accounts() if a.get("enabled", True)]
     return {"status": "ready" if accs else "no_account",
             "accounts": len(accs),
-            "browser_running": bool(engine.proc and engine.proc.poll() is None)}
+            "browser_running": engine.browser_alive()}
 
 
 @app.get("/v1/models")
@@ -1905,12 +1908,15 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
         return [head, body]
 
     if req.stream:
+        client_gone = threading.Event()
+
         def sync_stream():
             try:
                 # 握手建立瞬间立即发送 role: assistant 首包，让下游客户端秒级捕获光标
                 yield _sse(_chat_chunk(cid, created, model, {"role": "assistant"}))
 
-                stream_gen = safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images)
+                stream_gen = safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images,
+                                              stop_event=client_gone)
                 if not tool_note:
                     for chunk in stream_gen:
                         for piece in _pace_text(chunk):
@@ -1969,7 +1975,36 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
                 yield _sse({"error": {"message": str(exc), "type": "server_error", "code": 502}})
             except Exception as exc:
                 yield _sse({"error": {"message": f"内部错误: {exc}", "type": "server_error", "code": 500}})
-        return StreamingResponse(sync_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+        async def guarded():
+            # Klien putus (Hentikan) harus langsung menghentikan muse dan melepas akun. Generator sinkron menunggu
+            # kata pertama di thread; iterate_in_threadpool baru bisa dibatalkan setelah thread itu kembali, jadi
+            # thread ini mengisi asyncio.Queue yang penantiannya bisa dibatalkan seketika.
+            loop = asyncio.get_running_loop()
+            chunks: asyncio.Queue = asyncio.Queue()
+
+            def put(item):
+                try:
+                    loop.call_soon_threadsafe(chunks.put_nowait, item)
+                except RuntimeError:  # loop sudah ditutup: klien sudah pergi
+                    client_gone.set()
+
+            def pump():
+                # Jangan berhenti saat client_gone: safe_chat_stream juga men-set-nya ketika selesai normal,
+                # dan finish/[DONE] masih harus terkirim. Klien yang pergi sudah menghentikan muse lewat event itu.
+                try:
+                    for chunk in sync_stream():
+                        put(chunk)
+                finally:
+                    put(None)
+
+            threading.Thread(target=pump, daemon=True).start()
+            try:
+                while (chunk := await chunks.get()) is not None:
+                    yield chunk
+            finally:
+                client_gone.set()
+        return StreamingResponse(guarded(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
     def run() -> str:
         return "".join(safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id, images=images))
@@ -2194,7 +2229,7 @@ def admin_status(_=Depends(auth)):
         "tasks": store.list_tasks(20),
         "media_count": len(os.listdir(CFG.media_dir))
         if os.path.isdir(CFG.media_dir) else 0,
-        "browser_running": bool(engine.proc and engine.proc.poll() is None),
+        "browser_running": engine.browser_alive(),
         "essential_cookies": list(ESSENTIAL_COOKIES),
         "base_url": f"{base}/v1" if base else "",
         "config": {"site": CFG.site_url, "cdp_port": CFG.cdp_port,
@@ -3082,19 +3117,49 @@ def _check_update_sync(force: bool = False, _auto_upgrade: bool = False) -> dict
     except Exception:
         errors.append("远端版本文件读取失败")
     verified = bool(local_sha and remote_sha and remote_version)
-    has_update = bool((local_sha and remote_sha and local_sha != remote_sha) or
-                      (remote_version and local_version != remote_version))
+    local_ahead = bool(has_git and remote_commit and local_sha != remote_sha and _local_is_ahead(remote_commit))
+    has_update = not local_ahead and bool((local_sha and remote_sha and local_sha != remote_sha) or
+                                          (remote_version and local_version != remote_version))
     data = {"repo_url": REPO_URL, "repo_ref": REPO_REF, "has_git": has_git,
             "local_version": local_version, "local_sha": local_sha,
             "remote_version": remote_version, "remote_sha": remote_sha, "remote_commit": remote_commit,
             "remote_msg": remote_msg, "remote_time": remote_time,
             "has_update": has_update, "up_to_date": (not has_update and not local_dirty) if verified else None,
-            "local_dirty": local_dirty,
+            "local_dirty": local_dirty, "local_ahead": local_ahead,
             "check_error": "; ".join(errors), "managed_deployment": MANAGED_DEPLOYMENT,
             "highlights": highlights, "highlights_en": highlights_en,
             "recent_commits": commits, "checked_at": int(now)}
     _UPDATE_CACHE.update(ts=now, data=data)
     return data
+
+
+def _local_is_ahead(remote_commit: str) -> bool:
+    """Commit remote sudah ada di riwayat lokal: lokal sama atau lebih baru (commit belum di-push), bukan tertinggal."""
+    return _git(["merge-base", "--is-ancestor", remote_commit, "HEAD"]).returncode == 0
+
+
+def _local_work_at_risk(target: str) -> str:
+    """Alasan upgrade ke target akan menimpa pekerjaan lokal; "" bila aman."""
+    if _git(["rev-parse", "--verify", "-q", "HEAD"]).returncode != 0:
+        return ""  # repo baru di-init oleh updater: belum ada riwayat lokal
+    if _git(["status", "--porcelain", "--untracked-files=no"]).stdout.strip():
+        return "本地有未提交的修改，更新会覆盖它们。请先提交或丢弃修改后再更新"
+    if _git(["merge-base", "--is-ancestor", "HEAD", target]).returncode != 0:
+        return "本地有远端没有的提交（未推送或已分叉），更新会回退它们。请先推送或手动合并后再更新"
+    return ""
+
+
+def _restart_self():
+    """Jalankan ulang proses dengan perintah aslinya. Tetap hidup di nohup/terminal; systemd/Docker melihat proses yang sama."""
+    try:
+        engine.stop()
+    except Exception:
+        pass
+    try:
+        os.execv(sys.executable, sys.orig_argv)
+    except Exception:
+        log.exception("restart lewat execv gagal; keluar dan andalkan supervisor (systemd/Docker)")
+    os._exit(0)
 
 
 def _upgrade_from_github_sync() -> dict:
@@ -3111,12 +3176,17 @@ def _upgrade_from_github_sync() -> dict:
     upgraded_via = ""
     try:
         _ensure_git_repo(_read_env_key("GITHUB_TOKEN"))
-        for command in (["fetch", "origin", REPO_REF],
-                        ["checkout", "-f", target, "--", "."],
+        _git(["fetch", "origin", REPO_REF], timeout=45).check_returncode()
+        risk = _local_work_at_risk(target)
+        if risk:
+            raise HTTPException(409, risk)
+        for command in (["checkout", "-f", target, "--", "."],
                         ["reset", "--mixed", target]):
             result = _git(command, timeout=45)
             result.check_returncode()
         upgraded_via = "git"
+    except HTTPException:
+        raise  # tolakan pengaman: jangan jatuh ke tarball yang menimpa file yang sama
     except Exception as exc:
         log.warning("Git 更新未完成，尝试固定提交归档 (%s)", type(exc).__name__)
     if not upgraded_via:
@@ -3166,12 +3236,8 @@ async def admin_upgrade_now(payload: dict = Body(default={}), _=Depends(auth)):
     restart = payload.get("restart", True) if isinstance(payload, dict) else True
     if restart:
         def _delayed_restart():
-            time.sleep(0.5)
-            try:
-                engine.stop()
-            except Exception:
-                pass
-            os._exit(0)
+            time.sleep(0.5)  # beri waktu respons sampai ke browser
+            _restart_self()
         threading.Thread(target=_delayed_restart, daemon=True).start()
     return res
 

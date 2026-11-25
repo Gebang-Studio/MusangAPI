@@ -59,6 +59,18 @@ proxy_buffering off;         # supaya stream chat tidak tersendat
 client_max_body_size 200M;   # unggahan gambar acuan
 ```
 
+### HP Android (Termux), tanpa extension
+
+GemuseAPI bisa berjalan langsung di HP dan mengendalikan Chrome HP lewat debug nirkabel, jadi tidak perlu Chromium tambahan atau extension. Di Termux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gebang-Studio/MusangAPI/main/deploy/termux/install.sh | bash
+```
+
+Installer memandu pairing debug nirkabel (pakai layar terpisah Termux + Setelan), memasang dependensi (sekali kompilasi Rust, 10-20 menit), lalu menyalakan server di `http://127.0.0.1:18610/chat`. Setelah login muse.ai di Chrome HP, jalankan `gemuse login` untuk mengimpor sesinya. Perintah lain: `gemuse start|stop|status|update|logs|key`. Menjalankan ulang installer = update; `data/` dan `.env` tidak disentuh.
+
+Batasan di HP: setiap panggilan muse sekitar 20 detik (halaman muse berat untuk CPU HP), file buatan muse belum bisa diambil, dan Debug nirkabel kadang mati sendiri saat Wi-Fi berganti; nyalakan lagi lalu `gemuse start`.
+
 ## Menambahkan akun muse
 
 1. Login ke [muse.ai](https://muse.ai/) di browser biasa.
