@@ -424,7 +424,7 @@ class MuseEngine:
         self._download_dirs: set[str] = set()
         self.proxy_resolver = None
         self._last_http_renew: dict[str, float] = {}
-        self._parked: dict | None = None  # Android: tab muse siap pakai, disimpan antar permintaan
+        self._parked: dict[str, dict] = {}  # Android: tab muse siap pakai per akun, disimpan antar permintaan
         self._ui_tab: str | None = None  # Android: tab /chat terakhir yang terlihat (lihat _android_front_ui_tab)
         self._own_targets: set[str] = set()  # Android: id tab muse buatan engine (lihat _android_ui_guard)
         self._guard_started = False
@@ -603,8 +603,9 @@ class MuseEngine:
         with self._start_lock:
             self._close_page()
             with self._contexts_lock:
-                parked, self._parked = self._parked, None
-            self._dispose_parked(parked)
+                parked, self._parked = list(self._parked.values()), {}
+            for p in parked:
+                self._dispose_parked(p)
             if self.browser:
                 with self._contexts_lock:
                     for ctx_id in list(self._active_contexts):
@@ -1100,8 +1101,10 @@ class MuseEngine:
         if not (self.android and page and acc) or getattr(local, "proxy_config", None) or getattr(local, "proxy_relay", None):
             return False
         with self._contexts_lock:
-            old, self._parked = self._parked, {"page": page, "ctx": self.current_context_id, "acc": acc,
-                                               "dl": getattr(local, "download_dir", None)}
+            old = self._parked.pop(acc, None)
+            # shortcut: tab akun yang dihapus dari admin tetap tersimpan sampai server restart (1 tab muse).
+            self._parked[acc] = {"page": page, "ctx": self.current_context_id, "acc": acc,
+                                 "dl": getattr(local, "download_dir", None)}
         self.page = None
         self.current_context_id = None
         self.current_acc_id = None
@@ -1129,13 +1132,12 @@ class MuseEngine:
             shutil.rmtree(parked["dl"], ignore_errors=True)
 
     def _adopt_parked(self, account_id: str | None):
-        """Pakai tab simpanan bila milik akun yang sama; milik akun lain ditutup (HP biasanya 1 akun)."""
+        """Pakai tab simpanan akun ini. Satu tab per akun: dengan 2 akun, intent dan jawaban memakai akun berbeda,
+        jadi satu slot bersama akan saling menutup dan setiap panggilan memuat muse dari nol lagi."""
         with self._contexts_lock:
-            parked, self._parked = self._parked, None
+            key = account_id if account_id is not None else next(iter(self._parked), None)
+            parked = self._parked.pop(key, None) if key is not None else None
         if not parked:
-            return
-        if account_id is not None and parked["acc"] != account_id:
-            self._dispose_parked(parked)
             return
         self.page, self.current_context_id, self.current_acc_id = parked["page"], parked["ctx"], parked["acc"]
         self._ensure_local().download_dir = parked["dl"]
