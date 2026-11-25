@@ -69,7 +69,19 @@ curl -fsSL https://raw.githubusercontent.com/Gebang-Studio/MusangAPI/main/deploy
 
 Installer memandu pairing debug nirkabel (pakai layar terpisah Termux + Setelan), memasang dependensi (sekali kompilasi Rust, 10-20 menit), lalu menyalakan server di `http://127.0.0.1:18610/chat`. Setelah login muse.ai di Chrome HP, jalankan `gemuse login` untuk mengimpor sesinya. Perintah lain: `gemuse start|stop|status|update|logs|key`. Menjalankan ulang installer = update; `data/` dan `.env` tidak disentuh.
 
-Batasan di HP: setiap panggilan muse sekitar 20 detik (halaman muse berat untuk CPU HP), file buatan muse belum bisa diambil, dan Debug nirkabel kadang mati sendiri saat Wi-Fi berganti; nyalakan lagi lalu `gemuse start`.
+Batasan di HP: jawaban mulai tampil sekitar 6-9 detik untuk pertanyaan biasa dan sekitar 17 detik untuk pesan yang perlu dipilihkan jenisnya oleh muse (dengan 1 akun keduanya antre); file buatan muse belum bisa diambil; Debug nirkabel kadang mati sendiri saat Wi-Fi berganti, nyalakan lagi lalu `gemuse start`.
+
+#### Menambah akun muse kedua di HP
+
+Akun kedua membuat pesan tidak perlu antre di satu akun, dan kuotanya bertambah. Akun ini harus akun Meta yang berbeda (email atau Facebook lain).
+
+1. **Jangan tekan "Log out" di muse.ai.** Sesi akun pertama masih dipakai GemuseAPI.
+2. Hapus data login muse.ai di Chrome saja: **Chrome ⋮ → Setelan → Setelan situs → Semua situs → muse.ai → Hapus data**. Langkah ini hanya menghapus login di Chrome. Akun pertama yang sudah tersimpan di GemuseAPI tidak ikut terhapus.
+3. Buka muse.ai di Chrome HP, lalu login dengan akun kedua. Kalau Chrome langsung masuk ke akun lama lewat Facebook, pilih untuk memakai akun lain.
+4. Di Termux jalankan `gemuse login akun-2` (`akun-2` hanya nama, bebas diganti).
+5. Cek di `http://127.0.0.1:18610/admin`, tab akun: sekarang ada 2 akun.
+
+Sesudahnya Chrome HP login sebagai akun kedua. Setiap akun memakai satu tab muse yang tetap terbuka di Chrome HP supaya jawaban cepat.
 
 ## Menambahkan akun muse
 
